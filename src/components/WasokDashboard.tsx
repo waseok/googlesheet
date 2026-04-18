@@ -85,8 +85,9 @@ function SheetGrid({
       </p>
     );
   }
+  // 한 줄에 시트 카드 2개 (넓은 화면에서도 3열로 늘리지 않음)
   return (
-    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid grid-cols-2 gap-3">
       {list.map((item) => (
         <li key={item.id}>
           <SheetCard
@@ -427,7 +428,7 @@ export function WasokDashboard() {
                   >
                     완료 폴더
                     <span className="text-muted-foreground text-xs font-normal">
-                      제목을 누르면 시트가 열리고, 되돌리기로 원래 구역으로
+                      칸을 누르면 정보가 펼쳐지고, 되돌리기로 원래 구역으로
                       복귀합니다
                     </span>
                   </h2>
