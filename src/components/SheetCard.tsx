@@ -9,9 +9,8 @@ import {
   CardContent,
   CardFooter,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
-import { CalendarDays, Clock, FileText, Loader2Icon, UserRound } from "lucide-react";
+import { CalendarDays, Clock, Loader2Icon, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 const DESC_MAX = 8000;
@@ -102,15 +101,20 @@ export function SheetCard({
 
   return (
     <Card className="border-border/70 shadow-sm transition-shadow hover:shadow-md">
-      <CardHeader className="border-border/50 space-y-1 border-b bg-slate-50/80 pb-3 dark:bg-slate-900/40">
-        <div className="flex items-start gap-2">
-          <div className="bg-primary/10 text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md">
-            <FileText className="size-4" aria-hidden />
-          </div>
-          <CardTitle className="text-primary leading-snug font-semibold tracking-tight">
-            {item.name}
-          </CardTitle>
-        </div>
+      <CardHeader className="border-border/50 border-b bg-slate-50/80 pb-3 pt-1 dark:bg-slate-900/40">
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "text-primary hover:text-primary/85 focus-visible:ring-ring",
+            "block rounded-md px-2 py-1 text-center text-base leading-snug font-semibold tracking-tight",
+            "outline-none transition-colors focus-visible:ring-2 focus-visible:ring-offset-2",
+            "line-clamp-2 hover:underline"
+          )}
+        >
+          {item.name}
+        </a>
       </CardHeader>
       <CardContent className="space-y-3 pt-4">
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -188,7 +192,10 @@ export function SheetCard({
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
-          className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+          className={cn(
+            buttonVariants({ size: "sm" }),
+            "border-transparent bg-sky-600 text-white shadow-sm hover:bg-sky-700"
+          )}
         >
           시트 열기
         </a>
@@ -196,7 +203,7 @@ export function SheetCard({
           size="sm"
           disabled={completing}
           onClick={() => onComplete(item)}
-          className="bg-[#183963] hover:bg-[#143156]"
+          className="border-transparent bg-red-600 text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
         >
           {completing ? "처리 중…" : "완료 처리"}
         </Button>
