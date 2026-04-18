@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   title: "와석초등학교 시트 허브",
   description:
     "와석초등학교 업무용 구글 시트를 한곳에서 찾고, 완료 시 지정 폴더로 이동합니다.",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({

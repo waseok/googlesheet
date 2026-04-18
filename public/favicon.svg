@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="@ Ü¸ È">
+  <defs>
+    <linearGradient id="hubBg" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1e4a82" />
+      <stop offset="0.55" stop-color="#163963" />
+      <stop offset="1" stop-color="#0a1f38" />
+    </linearGradient>
+    <linearGradient id="spokeGlow" x1="32" y1="32" x2="50" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8ec8ff" stop-opacity="0.95" />
+      <stop offset="1" stop-color="#4a8fd4" stop-opacity="0.45" />
+    </linearGradient>
+  </defs>
+  <!-- 0½: Ü¸ È Áè $tD ¤ -->
+  <rect width="64" height="64" rx="14" fill="url(#hubBg)" />
+  <!-- ìÐ 1 xÜ\ ×” Ál (È) -->
+  <g stroke="url(#spokeGlow)" stroke-width="2.2" stroke-linecap="round" opacity="0.92">
+    <line x1="32" y1="32" x2="32" y2="13" />
+    <line x1="32" y1="32" x2="48.45" y2="22.5" />
+    <line x1="32" y1="32" x2="48.45" y2="41.5" />
+    <line x1="32" y1="32" x2="32" y2="51" />
+    <line x1="32" y1="32" x2="15.55" y2="41.5" />
+    <line x1="32" y1="32" x2="15.55" y2="22.5" />
+  </g>
+  <!-- 1 xÜ (ð°” Ü¸·¬Œ¤) -->
+  <circle cx="32" cy="13" r="4.8" fill="#e3f2ff" />
+  <circle cx="48.45" cy="22.5" r="4.8" fill="#cfe8ff" />
+  <circle cx="48.45" cy="41.5" r="4.8" fill="#cfe8ff" />
+  <circle cx="32" cy="51" r="4.8" fill="#e3f2ff" />
+  <circle cx="15.55" cy="41.5" r="4.8" fill="#cfe8ff" />
+  <circle cx="15.55" cy="22.5" r="4.8" fill="#cfe8ff" />
+  <!-- Y È -->
+  <circle cx="32" cy="32" r="11" fill="#ffffff" stroke="#4a8fd4" stroke-width="1.4" />
+  <!-- YÐ }\ ø¬Ü Œ¸(¤ÜÜ¸ ðÁ) -->
+  <g fill="#4a8fd4" opacity="0.28">
+    <rect x="25.5" y="25.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="30.5" y="25.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="35.5" y="25.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="25.5" y="30.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="30.5" y="30.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="35.5" y="30.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="25.5" y="35.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="30.5" y="35.5" width="3.2" height="3.2" rx="0.4" />
+    <rect x="35.5" y="35.5" width="3.2" height="3.2" rx="0.4" />
+  </g>
+</svg>
