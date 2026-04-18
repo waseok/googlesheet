@@ -66,9 +66,15 @@ type SheetGridProps = {
   list: SheetItem[];
   completingId: string | null;
   onComplete: (item: SheetItem) => void;
+  onDescriptionSaved: (id: string, description: string) => void;
 };
 
-function SheetGrid({ list, completingId, onComplete }: SheetGridProps) {
+function SheetGrid({
+  list,
+  completingId,
+  onComplete,
+  onDescriptionSaved,
+}: SheetGridProps) {
   if (list.length === 0) {
     return (
       <p className="text-muted-foreground py-10 text-center text-sm">
@@ -84,6 +90,7 @@ function SheetGrid({ list, completingId, onComplete }: SheetGridProps) {
             item={item}
             completing={completingId === item.id}
             onComplete={onComplete}
+            onDescriptionSaved={onDescriptionSaved}
           />
         </li>
       ))}
@@ -101,6 +108,26 @@ export function WasokDashboard() {
   const [query, setQuery] = React.useState("");
   const [sortKey, setSortKey] = React.useState<SortKey>("created_desc");
   const [completingId, setCompletingId] = React.useState<string | null>(null);
+
+  const itemsRef = React.useRef(items);
+  const collectRef = React.useRef(collectItems);
+  itemsRef.current = items;
+  collectRef.current = collectItems;
+
+  const patchDescription = React.useCallback(
+    (id: string, description: string) => {
+      const nextMain = itemsRef.current.map((x) =>
+        x.id === id ? { ...x, description } : x
+      );
+      const nextCol = collectRef.current.map((x) =>
+        x.id === id ? { ...x, description } : x
+      );
+      setItems(nextMain);
+      setCollectItems(nextCol);
+      writeSheetCache(nextMain, nextCol);
+    },
+    []
+  );
 
   const loadSheets = React.useCallback(async (opts: { force: boolean }) => {
     if (!opts.force) {
@@ -267,6 +294,7 @@ export function WasokDashboard() {
                   list={visibleMain}
                   completingId={completingId}
                   onComplete={handleComplete}
+                  onDescriptionSaved={patchDescription}
                 />
               </div>
             </section>
@@ -294,6 +322,7 @@ export function WasokDashboard() {
                   list={visibleCollect}
                   completingId={completingId}
                   onComplete={handleComplete}
+                  onDescriptionSaved={patchDescription}
                 />
               </div>
             </section>

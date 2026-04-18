@@ -34,6 +34,14 @@ export interface GasCompleteResponse {
   error?: string;
 }
 
+/** GAS 설명 저장 응답 */
+export interface GasDescriptionResponse {
+  ok: boolean;
+  id?: string;
+  description?: string;
+  error?: string;
+}
+
 /** 정렬 옵션: UI에서 사용 */
 export type SortKey =
   | "lastUpdated_desc"

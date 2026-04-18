@@ -7,6 +7,7 @@
  *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
  *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
  *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
+ *   - 설명 저장: POST JSON { action: "saveDescription", token, fileId, description } → Drive setDescription
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
@@ -231,6 +232,34 @@ function listWasokSheets() {
   }
 }
 
+/**
+ * 웹에서 입력한 설명을 Drive 파일 설명에 저장합니다(목록 규칙 통과 시트만).
+ * @param {string} fileId
+ * @param {string} description
+ * @returns {{ ok: boolean, id?: string, description?: string, error?: string }}
+ */
+function saveFileDescription_(fileId, description) {
+  if (!fileId) {
+    return { ok: false, error: 'fileId 가 필요합니다.' };
+  }
+  var maxLen = 8000;
+  var text = description != null ? String(description) : '';
+  if (text.length > maxLen) {
+    text = text.substring(0, maxLen);
+  }
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var gate = assertFileAllowedForHub_(file);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
+    }
+    file.setDescription(text);
+    return { ok: true, id: fileId, description: text };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+}
+
 function moveFileToCompleted(fileId) {
   if (!fileId) {
     return { ok: false, error: 'fileId 가 필요합니다.' };
@@ -300,6 +329,14 @@ function doPost(e) {
   if (!gate.ok) {
     return jsonOutput_(gate);
   }
+
+  var action = String(body.action || 'complete').toLowerCase();
+  if (action === 'savedescription' || action === 'save_description') {
+    var sid = body.fileId || '';
+    var sdesc = body.description != null ? body.description : '';
+    return jsonOutput_(saveFileDescription_(sid, sdesc));
+  }
+
   var fileId = body.fileId || (e.parameter && e.parameter.fileId) || '';
   return jsonOutput_(moveFileToCompleted(fileId));
 }
