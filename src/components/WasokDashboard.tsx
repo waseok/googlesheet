@@ -62,7 +62,10 @@ function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   }
 }
 
+type SheetSegment = "general" | "collect";
+
 type SheetGridProps = {
+  segment: SheetSegment;
   list: SheetItem[];
   completingId: string | null;
   onComplete: (item: SheetItem) => void;
@@ -70,6 +73,7 @@ type SheetGridProps = {
 };
 
 function SheetGrid({
+  segment,
   list,
   completingId,
   onComplete,
@@ -87,6 +91,7 @@ function SheetGrid({
       {list.map((item) => (
         <li key={item.id}>
           <SheetCard
+            segment={segment}
             item={item}
             completing={completingId === item.id}
             onComplete={onComplete}
@@ -291,6 +296,7 @@ export function WasokDashboard() {
               </div>
               <div className="p-5">
                 <SheetGrid
+                  segment="general"
                   list={visibleMain}
                   completingId={completingId}
                   onComplete={handleComplete}
@@ -319,6 +325,7 @@ export function WasokDashboard() {
               </div>
               <div className="p-5">
                 <SheetGrid
+                  segment="collect"
                   list={visibleCollect}
                   completingId={completingId}
                   onComplete={handleComplete}

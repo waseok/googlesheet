@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { GasDescriptionResponse } from "@/lib/types";
 import { requireGasMutationToken, requireGasWebAppUrl } from "@/lib/gas-config";
 
-const MAX_LEN = 8000;
+const MAX_LEN = 4000;
 
 /**
  * 시트 설명을 Drive에 저장합니다(GAS POST → setDescription).

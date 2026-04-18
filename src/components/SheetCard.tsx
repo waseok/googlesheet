@@ -10,16 +10,26 @@ import {
   CardFooter,
   CardHeader,
 } from "@/components/ui/card";
-import { CalendarDays, Clock, Loader2Icon, UserRound } from "lucide-react";
+import {
+  CalendarDays,
+  Clock,
+  FileSpreadsheet,
+  Layers,
+  Loader2Icon,
+  UserRound,
+} from "lucide-react";
 import { toast } from "sonner";
 
-const DESC_MAX = 8000;
+const DESC_MAX = 4000;
+
+export type SheetCardSegment = "general" | "collect";
 
 type SheetCardProps = {
+  /** 일반 시트 / 취합 시트 — 헤더 아이콘 구분 */
+  segment: SheetCardSegment;
   item: SheetItem;
   completing: boolean;
   onComplete: (item: SheetItem) => void;
-  /** 설명 저장 후 부모 목록·캐시 동기화 */
   onDescriptionSaved: (id: string, description: string) => void;
 };
 
@@ -38,10 +48,28 @@ function formatKo(iso?: string, fallback = ""): string {
   }
 }
 
+function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
+  if (segment === "collect") {
+    return (
+      <Layers
+        className="text-emerald-700 dark:text-emerald-400 size-7 shrink-0"
+        aria-hidden
+      />
+    );
+  }
+  return (
+    <FileSpreadsheet
+      className="text-sky-700 dark:text-sky-400 size-7 shrink-0"
+      aria-hidden
+    />
+  );
+}
+
 /**
- * 시트 한 건 — 작성자·날짜·웹에서 편집 가능한 설명(Drive 동기화)
+ * 시트 한 건 — 일반/취합 아이콘, 작성자·날짜·설명(Drive 동기화)
  */
 export function SheetCard({
+  segment,
   item,
   completing,
   onComplete,
@@ -101,20 +129,23 @@ export function SheetCard({
 
   return (
     <Card className="border-border/70 shadow-sm transition-shadow hover:shadow-md">
-      <CardHeader className="border-border/50 border-b bg-slate-50/80 pb-3 pt-1 dark:bg-slate-900/40">
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            "text-primary hover:text-primary/85 focus-visible:ring-ring",
-            "block rounded-md px-2 py-1 text-center text-base leading-snug font-semibold tracking-tight",
-            "outline-none transition-colors focus-visible:ring-2 focus-visible:ring-offset-2",
-            "line-clamp-2 hover:underline"
-          )}
-        >
-          {item.name}
-        </a>
+      <CardHeader className="border-border/50 border-b bg-slate-50/80 pb-3 pt-2 dark:bg-slate-900/40">
+        <div className="flex items-center justify-center gap-2.5 px-1">
+          <SegmentIcon segment={segment} />
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              "text-primary hover:text-primary/85 focus-visible:ring-ring",
+              "min-w-0 flex-1 rounded-md py-0.5 text-center text-lg leading-snug font-semibold tracking-tight sm:text-xl",
+              "outline-none transition-colors focus-visible:ring-2 focus-visible:ring-offset-2",
+              "line-clamp-2 hover:underline"
+            )}
+          >
+            {item.name}
+          </a>
+        </div>
       </CardHeader>
       <CardContent className="space-y-3 pt-4">
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -150,11 +181,11 @@ export function SheetCard({
             value={draft}
             onChange={(e) => setDraft(e.target.value.slice(0, DESC_MAX))}
             maxLength={DESC_MAX}
-            rows={4}
-            placeholder="이 시트 용도·담당·기한 등을 적어 두면 다른 선생님들이 바로 파악할 수 있어요."
+            rows={2}
+            placeholder="용도·담당·기한 등을 짧게 적어 주세요."
             className={cn(
               "border-input bg-background ring-offset-background placeholder:text-muted-foreground",
-              "focus-visible:ring-ring w-full resize-y rounded-md border px-3 py-2 text-sm leading-relaxed shadow-sm",
+              "focus-visible:ring-ring max-h-[4.25rem] min-h-[2.75rem] w-full resize-y rounded-md border px-2.5 py-1.5 text-sm leading-snug shadow-sm",
               "focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
               "disabled:cursor-not-allowed disabled:opacity-50"
             )}

@@ -7,7 +7,7 @@
  *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
  *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
  *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
- *   - 설명 저장: POST JSON { action: "saveDescription", token, fileId, description } → Drive setDescription
+ *   - 설명 저장: POST JSON … description 최대 4000자 → Drive setDescription
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
@@ -242,7 +242,7 @@ function saveFileDescription_(fileId, description) {
   if (!fileId) {
     return { ok: false, error: 'fileId 가 필요합니다.' };
   }
-  var maxLen = 8000;
+  var maxLen = 4000;
   var text = description != null ? String(description) : '';
   if (text.length > maxLen) {
     text = text.substring(0, maxLen);
