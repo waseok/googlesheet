@@ -20,18 +20,28 @@ type SheetCardProps = {
   onComplete: (item: SheetItem) => void;
 };
 
+function formatKo(iso?: string, fallback = ""): string {
+  if (!iso) return fallback;
+  try {
+    return new Date(iso).toLocaleString("ko-KR");
+  } catch {
+    return iso;
+  }
+}
+
 /**
  * 한 개의 구글 시트 정보를 카드로 표시합니다.
  * [바로가기]는 새 탭에서 시트를 엽니다.
  */
 export function SheetCard({ item, completing, onComplete }: SheetCardProps) {
-  const updated = React.useMemo(() => {
-    try {
-      return new Date(item.lastUpdated).toLocaleString("ko-KR");
-    } catch {
-      return item.lastUpdated;
-    }
-  }, [item.lastUpdated]);
+  const updated = React.useMemo(
+    () => formatKo(item.lastUpdated),
+    [item.lastUpdated]
+  );
+  const created = React.useMemo(
+    () => formatKo(item.createdTime, "(알 수 없음)"),
+    [item.createdTime]
+  );
 
   return (
     <Card className="flex flex-col">
@@ -44,6 +54,9 @@ export function SheetCard({ item, completing, onComplete }: SheetCardProps) {
         <p>
           <span className="font-medium text-foreground">소유자</span>{" "}
           {item.owner || "(알 수 없음)"}
+        </p>
+        <p>
+          <span className="font-medium text-foreground">생성</span> {created}
         </p>
         <p>
           <span className="font-medium text-foreground">수정</span> {updated}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { GasListResponse } from "@/lib/types";
+import type { GasListResponse, SheetItem } from "@/lib/types";
 import { requireGasWebAppUrl } from "@/lib/gas-config";
 
 /**
@@ -12,7 +12,12 @@ export async function GET() {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, items: [], error: message } satisfies GasListResponse,
+      {
+        ok: false,
+        items: [],
+        collectItems: [],
+        error: message,
+      } satisfies GasListResponse,
       { status: 500 }
     );
   }
@@ -29,6 +34,7 @@ export async function GET() {
       {
         ok: false,
         items: [],
+        collectItems: [],
         error: `GAS 호출 실패: ${message}`,
       } satisfies GasListResponse,
       { status: 502 }
@@ -43,6 +49,7 @@ export async function GET() {
       {
         ok: false,
         items: [],
+        collectItems: [],
         error: "GAS 응답이 JSON 이 아닙니다. 웹앱 URL 을 확인하세요.",
       } satisfies GasListResponse,
       { status: 502 }
@@ -55,15 +62,22 @@ export async function GET() {
       {
         ok: false,
         items: [],
+        collectItems: [],
         error: parsed.error || `GAS HTTP ${gasRes.status}`,
       } satisfies GasListResponse,
       { status: 502 }
     );
   }
 
+  const items: SheetItem[] = Array.isArray(parsed.items) ? parsed.items : [];
+  const collectItems: SheetItem[] = Array.isArray(parsed.collectItems)
+    ? parsed.collectItems
+    : [];
+
   return NextResponse.json({
     ok: parsed.ok !== false,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
+    items,
+    collectItems,
     error: parsed.error,
   } satisfies GasListResponse);
 }

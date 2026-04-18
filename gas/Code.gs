@@ -2,40 +2,33 @@
  * ============================================================================
  * 와석초 구글 시트 통합 관리 대시보드 (Wasok Sheet Hub) - Google Apps Script
  * ============================================================================
- * 역할:
- *   1) Drive에서 제목에 '[와석초]'가 포함된 스프레드시트를 검색해 JSON으로 반환
- *   2) 완료 처리 시 지정한 '완료 폴더'로 파일 이동 (스프레드시트만 허용)
+ * 목록 규칙:
+ *   - 제목에 대괄호 포함 문자열 "[와석초]" 가 정확히 들어간 스프레드시트만 (와석초 단독 제외)
+ *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
+ *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
  *
- * 스크립트 속성(프로젝트 설정 > 스크립트 속성):
- *   - COMPLETED_FOLDER_ID : 완료 이동 대상 폴더 ID (필수)
- *   - MUTATION_TOKEN      : 완료/이동 API용 비밀 문자열(필수). 쿼리 ?token= 또는 POST body
+ * 스크립트 속성:
+ *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
+ *   - LIST_YEAR (선택, 기본 2026) — 생성 연도 필터
  *
- * 배포: [배포] > [새 배포] > 유형 웹 앱, 실행 사용자 본인, 액세스 권한은 학교 정책에 맞게.
- * 코드 변경 후에는 반드시 동일 배포에서 [새 버전]으로 재배포해야 반영됩니다.
- *
- * 한계(MVP): DriveApp 기준으로 실행 사용자가 접근 가능한 드라이브 범위에서만 검색됩니다.
- * 공유 드라이브(팀 드라이브) 전체 검색은 Advanced Drive API 등 별도 설정이 필요합니다.
- *
- * CORS: 외부 프런트에서 직접 호출 시 이슈가 있을 수 있으므로 Next.js API 프록시 사용을 권장합니다.
+ * Drive 검색은 title contains '와석초' 로 후보를 넓게 가져온 뒤, 스크립트에서 위 규칙으로 엄격 필터합니다.
+ * (쿼리만 title contains '[와석초]' 로 두면 Drive 쪽에서 대괄호 해석이 달라질 수 있어 후보+필터 방식을 씁니다.)
  * ============================================================================
  */
 
-// ---------------------------------------------------------------------------
-// 기본값(스크립트 속성이 없을 때만 사용)
-// ---------------------------------------------------------------------------
-/** @type {string} 완료 폴더 ID — 비우면 COMPLETED_FOLDER_ID 스크립트 속성 필수 */
 var DEFAULT_COMPLETED_FOLDER_ID = '';
 
-/** 제목에 포함되는 키워드 */
-var TITLE_KEYWORD = '[와석초]';
+/** 목록·완료 검증에 쓰는 생성 연도 (스크립트 속성 LIST_YEAR 가 있으면 우선) */
+var DEFAULT_LIST_YEAR = 2026;
 
-/** Google 스프레드시트 MIME (이동 API에서만 허용) */
+/** 제목에 반드시 포함되어야 하는 문자열(대괄호 포함) */
+var REQUIRED_TITLE_MARK = '[와석초]';
+
+/** 제목에 포함되면 "취합" 구역으로 분류 */
+var COLLECT_MARK = '취합';
+
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 
-/**
- * 스크립트 속성: 완료 폴더 ID
- * @returns {string}
- */
 function getCompletedFolderId_() {
   var id = PropertiesService.getScriptProperties().getProperty('COMPLETED_FOLDER_ID');
   if (id && id.length > 0) {
@@ -44,20 +37,20 @@ function getCompletedFolderId_() {
   return DEFAULT_COMPLETED_FOLDER_ID || '';
 }
 
-/**
- * 스크립트 속성: 완료/이동 요청용 토큰(비어 있으면 완료 API 거부)
- * @returns {string}
- */
 function getMutationToken_() {
   var t = PropertiesService.getScriptProperties().getProperty('MUTATION_TOKEN');
   return t && t.length > 0 ? t : '';
 }
 
-/**
- * 완료/이동 요청이 허용되는지 검사합니다.
- * @param {string} tokenFromRequest 쿼리 또는 POST body 의 token
- * @returns {{ ok: boolean, error?: string }}
- */
+/** @returns {number} */
+function getListYear_() {
+  var y = PropertiesService.getScriptProperties().getProperty('LIST_YEAR');
+  if (y && /^\d{4}$/.test(y)) {
+    return parseInt(y, 10);
+  }
+  return DEFAULT_LIST_YEAR;
+}
+
 function assertMutationAllowed_(tokenFromRequest) {
   var expected = getMutationToken_();
   if (!expected) {
@@ -73,24 +66,57 @@ function assertMutationAllowed_(tokenFromRequest) {
 }
 
 /**
- * Drive 검색 쿼리 (스프레드시트만, 휴지통 제외)
+ * Drive 후보 검색 쿼리 (스크립트에서 [와석초]·연도·MIME 재검증)
  * @returns {string}
  */
-function buildSearchQuery_() {
+function buildLooseSearchQuery_() {
   return (
-    "title contains '" +
-    TITLE_KEYWORD.replace(/'/g, "\\'") +
-    "' and mimeType = '" +
+    "title contains '와석초' and mimeType = '" +
     SPREADSHEET_MIME +
     "' and trashed = false"
   );
 }
 
 /**
- * lastUpdated 기준 내림차순 정렬 (ISO 문자열 비교)
- * @param {Array<Object>} items
- * @returns {Array<Object>}
+ * 허브 규칙: 스프레드시트, 제목에 "[와석초]" 부분 문자열, 생성 연도
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {boolean}
  */
+function filePassesListRules_(file) {
+  if (file.getMimeType() !== SPREADSHEET_MIME) {
+    return false;
+  }
+  var name = file.getName();
+  if (name.indexOf(REQUIRED_TITLE_MARK) === -1) {
+    return false;
+  }
+  var year = file.getDateCreated().getFullYear();
+  return year === getListYear_();
+}
+
+/**
+ * 완료 이동 전 동일 규칙 검증
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function assertFileAllowedForHub_(file) {
+  if (file.getMimeType() !== SPREADSHEET_MIME) {
+    return { ok: false, error: '스프레드시트가 아닙니다.' };
+  }
+  var name = file.getName();
+  if (name.indexOf(REQUIRED_TITLE_MARK) === -1) {
+    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
+  }
+  var y = file.getDateCreated().getFullYear();
+  if (y !== getListYear_()) {
+    return {
+      ok: false,
+      error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.',
+    };
+  }
+  return { ok: true };
+}
+
 function sortItemsByLastUpdatedDesc_(items) {
   return items.slice().sort(function (a, b) {
     if (a.lastUpdated < b.lastUpdated) return 1;
@@ -100,51 +126,77 @@ function sortItemsByLastUpdatedDesc_(items) {
 }
 
 /**
- * 검색 결과를 항목 배열로 변환
- * @param {GoogleAppsScript.Drive.FileIterator} iterator
- * @returns {Array<Object>}
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {Object}
  */
-function mapFileIteratorToItems_(iterator) {
-  var items = [];
-  while (iterator.hasNext()) {
-    var file = iterator.next();
-    var ownerEmail = '';
-    try {
-      ownerEmail = file.getOwner().getEmail();
-    } catch (err) {
-      ownerEmail = '';
-    }
-    items.push({
-      id: file.getId(),
-      name: file.getName(),
-      url: file.getUrl(),
-      owner: ownerEmail,
-      lastUpdated: file.getLastUpdated().toISOString(),
-    });
+function fileToItem_(file) {
+  var ownerEmail = '';
+  try {
+    ownerEmail = file.getOwner().getEmail();
+  } catch (err) {
+    ownerEmail = '';
   }
-  return items;
+  return {
+    id: file.getId(),
+    name: file.getName(),
+    url: file.getUrl(),
+    owner: ownerEmail,
+    lastUpdated: file.getLastUpdated().toISOString(),
+    createdTime: file.getDateCreated().toISOString(),
+  };
 }
 
 /**
- * '[와석초]' 스프레드시트 목록 (최신 수정순)
- * @returns {{ ok: boolean, items: Array<Object>, error?: string }}
+ * @param {Array<Object>} items name 필드 기준
+ * @returns {{ items: Array<Object>, collectItems: Array<Object> }}
+ */
+function partitionCollect_(items) {
+  var general = [];
+  var collect = [];
+  for (var i = 0; i < items.length; i++) {
+    var row = items[i];
+    if (row.name.indexOf(COLLECT_MARK) !== -1) {
+      collect.push(row);
+    } else {
+      general.push(row);
+    }
+  }
+  return { items: general, collectItems: collect };
+}
+
+/**
+ * @returns {{ ok: boolean, items: Array<Object>, collectItems: Array<Object>, error?: string }}
  */
 function listWasokSheets() {
   try {
-    var query = buildSearchQuery_();
+    var query = buildLooseSearchQuery_();
     var iterator = DriveApp.searchFiles(query);
-    var items = sortItemsByLastUpdatedDesc_(mapFileIteratorToItems_(iterator));
-    return { ok: true, items: items };
+    var passed = [];
+    while (iterator.hasNext()) {
+      var file = iterator.next();
+      if (filePassesListRules_(file)) {
+        passed.push(fileToItem_(file));
+      }
+    }
+    var sorted = sortItemsByLastUpdatedDesc_(passed);
+    var parts = partitionCollect_(sorted);
+    parts.items = sortItemsByLastUpdatedDesc_(parts.items);
+    parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
+    return {
+      ok: true,
+      items: parts.items,
+      collectItems: parts.collectItems,
+    };
   } catch (e) {
-    return { ok: false, items: [], error: String(e && e.message ? e.message : e) };
+    return {
+      ok: false,
+      items: [],
+      collectItems: [],
+      error: String(e && e.message ? e.message : e),
+    };
   }
 }
 
-/**
- * 파일을 완료 폴더로 이동 (스프레드시트 MIME 만)
- * @param {string} fileId
- * @returns {{ ok: boolean, message?: string, id?: string, error?: string }}
- */
 function moveFileToCompleted(fileId) {
   if (!fileId) {
     return { ok: false, error: 'fileId 가 필요합니다.' };
@@ -160,8 +212,9 @@ function moveFileToCompleted(fileId) {
 
   try {
     var file = DriveApp.getFileById(fileId);
-    if (file.getMimeType() !== SPREADSHEET_MIME) {
-      return { ok: false, error: '스프레드시트가 아닌 파일은 이동할 수 없습니다.' };
+    var gate = assertFileAllowedForHub_(file);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
     }
 
     var targetFolder = DriveApp.getFolderById(folderId);
@@ -177,23 +230,12 @@ function moveFileToCompleted(fileId) {
   }
 }
 
-/**
- * @param {Object} payload
- * @returns {GoogleAppsScript.Content.TextOutput}
- */
 function jsonOutput_(payload) {
   var out = ContentService.createTextOutput(JSON.stringify(payload));
   out.setMimeType(ContentService.MimeType.JSON);
   return out;
 }
 
-/**
- * GET
- *   목록: .../exec 또는 ?action=list
- *   완료: ?action=complete&fileId=...&token=MUTATION_TOKEN
- * @param {Object} e
- * @returns {GoogleAppsScript.Content.TextOutput}
- */
 function doGet(e) {
   var params = e && e.parameter ? e.parameter : {};
   var action = (params.action || 'list').toLowerCase();
@@ -210,11 +252,6 @@ function doGet(e) {
   return jsonOutput_(listWasokSheets());
 }
 
-/**
- * POST body: { "fileId": "...", "token": "MUTATION_TOKEN" }
- * @param {Object} e
- * @returns {GoogleAppsScript.Content.TextOutput}
- */
 function doPost(e) {
   var body = {};
   try {

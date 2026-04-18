@@ -1,43 +1,59 @@
 import type { SheetItem } from "@/lib/types";
 
-/** sessionStorage 키 (버전 접미사로 스키마 변경 시 충돌 방지) */
-const CACHE_KEY = "wasok_sheets_cache_v1";
+/** 스키마 변경 시 키만 올리면 이전 캐시 무시 */
+const CACHE_KEY = "wasok_sheets_cache_v2";
 
-/** 캐시 유효 시간(밀리초) — 5분 */
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 type CachePayload = {
   ts: number;
   items: SheetItem[];
+  collectItems: SheetItem[];
 };
 
 /**
- * 브라우저 탭 단위 캐시: GAS/프록시 호출을 줄여 체감 속도를 높입니다.
- * 새로고침 버튼에서는 `force` 로 이 캐시를 무시합니다.
+ * 일반 목록 + 취합 목록을 함께 캐시합니다.
  */
-export function readSheetCache(): { items: SheetItem[]; fresh: boolean } {
+export function readSheetCache(): {
+  items: SheetItem[];
+  collectItems: SheetItem[];
+  fresh: boolean;
+} {
   if (typeof window === "undefined") {
-    return { items: [], fresh: false };
+    return { items: [], collectItems: [], fresh: false };
   }
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    if (!raw) return { items: [], fresh: false };
+    if (!raw) return { items: [], collectItems: [], fresh: false };
     const parsed = JSON.parse(raw) as Partial<CachePayload>;
     if (
       typeof parsed.ts !== "number" ||
       !Array.isArray(parsed.items) ||
       Date.now() - parsed.ts > CACHE_TTL_MS
     ) {
-      return { items: [], fresh: false };
+      return { items: [], collectItems: [], fresh: false };
     }
-    return { items: parsed.items as SheetItem[], fresh: true };
+    return {
+      items: parsed.items as SheetItem[],
+      collectItems: Array.isArray(parsed.collectItems)
+        ? (parsed.collectItems as SheetItem[])
+        : [],
+      fresh: true,
+    };
   } catch {
-    return { items: [], fresh: false };
+    return { items: [], collectItems: [], fresh: false };
   }
 }
 
-export function writeSheetCache(items: SheetItem[]): void {
+export function writeSheetCache(
+  items: SheetItem[],
+  collectItems: SheetItem[]
+): void {
   if (typeof window === "undefined") return;
-  const payload: CachePayload = { ts: Date.now(), items };
+  const payload: CachePayload = {
+    ts: Date.now(),
+    items,
+    collectItems,
+  };
   sessionStorage.setItem(CACHE_KEY, JSON.stringify(payload));
 }

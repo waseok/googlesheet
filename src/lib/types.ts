@@ -7,12 +7,17 @@ export interface SheetItem {
   url: string;
   owner: string;
   lastUpdated: string;
+  /** 생성 시각(ISO). GAS에서 getDateCreated 기준 */
+  createdTime?: string;
 }
 
-/** GAS `listWasokSheets` 응답 */
+/** GAS `listWasokSheets` 응답 — 일반 / 취합 분리 */
 export interface GasListResponse {
   ok: boolean;
+  /** 제목에 "취합"이 없는 시트 */
   items: SheetItem[];
+  /** 제목에 "취합"이 포함된 시트 */
+  collectItems: SheetItem[];
   error?: string;
 }
 
@@ -28,5 +33,7 @@ export interface GasCompleteResponse {
 export type SortKey =
   | "lastUpdated_desc"
   | "lastUpdated_asc"
+  | "created_desc"
+  | "created_asc"
   | "name_asc"
   | "name_desc";
