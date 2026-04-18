@@ -16,13 +16,15 @@ export interface SheetItem {
   createdTime?: string;
 }
 
-/** GAS `listWasokSheets` 응답 — 일반 / 취합 분리 */
+/** GAS `listWasokSheets` 응답 */
 export interface GasListResponse {
   ok: boolean;
-  /** 제목에 "취합"이 없는 시트 */
+  /** 제목에 "취합"이 없는 시트(완료 폴더 제외) */
   items: SheetItem[];
-  /** 제목에 "취합"이 포함된 시트 */
+  /** 제목에 "취합"이 포함된 시트(완료 폴더 제외) */
   collectItems: SheetItem[];
+  /** 완료 폴더 안 시트 */
+  completedItems: SheetItem[];
   error?: string;
 }
 

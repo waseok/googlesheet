@@ -3,6 +3,16 @@ import type { GasListResponse, SheetItem } from "@/lib/types";
 import { requireGasWebAppUrl } from "@/lib/gas-config";
 import { normalizeGasSheetItem } from "@/lib/normalize-sheet-item";
 
+function emptyListError(message: string): GasListResponse {
+  return {
+    ok: false,
+    items: [],
+    collectItems: [],
+    completedItems: [],
+    error: message,
+  };
+}
+
 function normalizeList(raw: unknown): SheetItem[] {
   if (!Array.isArray(raw)) return [];
   const out: SheetItem[] = [];
@@ -22,15 +32,7 @@ export async function GET() {
     baseUrl = requireGasWebAppUrl();
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      {
-        ok: false,
-        items: [],
-        collectItems: [],
-        error: message,
-      } satisfies GasListResponse,
-      { status: 500 }
-    );
+    return NextResponse.json(emptyListError(message), { status: 500 });
   }
 
   const url = new URL(baseUrl);
@@ -41,15 +43,9 @@ export async function GET() {
     gasRes = await fetch(url.toString(), { cache: "no-store" });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      {
-        ok: false,
-        items: [],
-        collectItems: [],
-        error: `GAS 호출 실패: ${message}`,
-      } satisfies GasListResponse,
-      { status: 502 }
-    );
+    return NextResponse.json(emptyListError(`GAS 호출 실패: ${message}`), {
+      status: 502,
+    });
   }
 
   let data: unknown;
@@ -57,12 +53,7 @@ export async function GET() {
     data = await gasRes.json();
   } catch {
     return NextResponse.json(
-      {
-        ok: false,
-        items: [],
-        collectItems: [],
-        error: "GAS 응답이 JSON 이 아닙니다. 웹앱 URL 을 확인하세요.",
-      } satisfies GasListResponse,
+      emptyListError("GAS 응답이 JSON 이 아닙니다. 웹앱 URL 을 확인하세요."),
       { status: 502 }
     );
   }
@@ -70,23 +61,20 @@ export async function GET() {
   const parsed = data as Partial<GasListResponse>;
   if (!gasRes.ok) {
     return NextResponse.json(
-      {
-        ok: false,
-        items: [],
-        collectItems: [],
-        error: parsed.error || `GAS HTTP ${gasRes.status}`,
-      } satisfies GasListResponse,
+      emptyListError(parsed.error || `GAS HTTP ${gasRes.status}`),
       { status: 502 }
     );
   }
 
   const items = normalizeList(parsed.items);
   const collectItems = normalizeList(parsed.collectItems);
+  const completedItems = normalizeList(parsed.completedItems);
 
   return NextResponse.json({
     ok: parsed.ok !== false,
     items,
     collectItems,
+    completedItems,
     error: parsed.error,
   } satisfies GasListResponse);
 }

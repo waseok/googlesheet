@@ -11,6 +11,7 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import {
+  Archive,
   CalendarDays,
   Clock,
   FileSpreadsheet,
@@ -20,9 +21,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const DESC_MAX = 4000;
+const DESC_MAX = 300;
 
-export type SheetCardSegment = "general" | "collect";
+export type SheetCardSegment = "general" | "collect" | "completed";
 
 type SheetCardProps = {
   /** 일반 시트 / 취합 시트 — 헤더 아이콘 구분 */
@@ -53,6 +54,14 @@ function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
     return (
       <Layers
         className="text-emerald-700 dark:text-emerald-400 size-7 shrink-0"
+        aria-hidden
+      />
+    );
+  }
+  if (segment === "completed") {
+    return (
+      <Archive
+        className="text-amber-800 dark:text-amber-400 size-7 shrink-0"
         aria-hidden
       />
     );
@@ -230,14 +239,16 @@ export function SheetCard({
         >
           시트 열기
         </a>
-        <Button
-          size="sm"
-          disabled={completing}
-          onClick={() => onComplete(item)}
-          className="border-transparent bg-red-600 text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
-        >
-          {completing ? "처리 중…" : "완료 처리"}
-        </Button>
+        {segment !== "completed" ? (
+          <Button
+            size="sm"
+            disabled={completing}
+            onClick={() => onComplete(item)}
+            className="border-transparent bg-red-600 text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
+          >
+            {completing ? "처리 중…" : "완료 처리"}
+          </Button>
+        ) : null}
       </CardFooter>
     </Card>
   );

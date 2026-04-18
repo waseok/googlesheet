@@ -7,7 +7,7 @@ import type { SheetItem, SortKey } from "@/lib/types";
 import { readSheetCache, writeSheetCache } from "@/lib/sheet-cache";
 import { SearchBar } from "@/components/SearchBar";
 import { SortDropdown } from "@/components/SortDropdown";
-import { SheetCard } from "@/components/SheetCard";
+import { SheetCard, type SheetCardSegment } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
 
 function primaryTime(it: SheetItem): string {
@@ -62,10 +62,8 @@ function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   }
 }
 
-type SheetSegment = "general" | "collect";
-
 type SheetGridProps = {
-  segment: SheetSegment;
+  segment: SheetCardSegment;
   list: SheetItem[];
   completingId: string | null;
   onComplete: (item: SheetItem) => void;
@@ -104,11 +102,12 @@ function SheetGrid({
 }
 
 /**
- * 와석초 시트 허브 대시보드 — 교표·헤더, 일반/취합 구역, 검색·정렬
+ * 와석초 시트 허브 — 일반 / 취합 / 완료 폴더(하단)
  */
 export function WasokDashboard() {
   const [items, setItems] = React.useState<SheetItem[]>([]);
   const [collectItems, setCollectItems] = React.useState<SheetItem[]>([]);
+  const [completedItems, setCompletedItems] = React.useState<SheetItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [query, setQuery] = React.useState("");
   const [sortKey, setSortKey] = React.useState<SortKey>("created_desc");
@@ -116,20 +115,22 @@ export function WasokDashboard() {
 
   const itemsRef = React.useRef(items);
   const collectRef = React.useRef(collectItems);
+  const completedRef = React.useRef(completedItems);
   itemsRef.current = items;
   collectRef.current = collectItems;
+  completedRef.current = completedItems;
 
   const patchDescription = React.useCallback(
     (id: string, description: string) => {
-      const nextMain = itemsRef.current.map((x) =>
-        x.id === id ? { ...x, description } : x
-      );
-      const nextCol = collectRef.current.map((x) =>
-        x.id === id ? { ...x, description } : x
-      );
+      const patch = (list: SheetItem[]) =>
+        list.map((x) => (x.id === id ? { ...x, description } : x));
+      const nextMain = patch(itemsRef.current);
+      const nextCol = patch(collectRef.current);
+      const nextDone = patch(completedRef.current);
       setItems(nextMain);
       setCollectItems(nextCol);
-      writeSheetCache(nextMain, nextCol);
+      setCompletedItems(nextDone);
+      writeSheetCache(nextMain, nextCol, nextDone);
     },
     []
   );
@@ -140,6 +141,7 @@ export function WasokDashboard() {
       if (cached.fresh) {
         setItems(cached.items);
         setCollectItems(cached.collectItems);
+        setCompletedItems(cached.completedItems);
         setLoading(false);
         return;
       }
@@ -152,6 +154,7 @@ export function WasokDashboard() {
         ok?: boolean;
         items?: SheetItem[];
         collectItems?: SheetItem[];
+        completedItems?: SheetItem[];
         error?: string;
       };
 
@@ -161,14 +164,17 @@ export function WasokDashboard() {
 
       const next = Array.isArray(data.items) ? data.items : [];
       const nextCollect = Array.isArray(data.collectItems) ? data.collectItems : [];
+      const nextDone = Array.isArray(data.completedItems) ? data.completedItems : [];
       setItems(next);
       setCollectItems(nextCollect);
-      writeSheetCache(next, nextCollect);
+      setCompletedItems(nextDone);
+      writeSheetCache(next, nextCollect, nextDone);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error("목록을 불러오지 못했습니다.", { description: msg });
       setItems([]);
       setCollectItems([]);
+      setCompletedItems([]);
     } finally {
       setLoading(false);
     }
@@ -188,16 +194,34 @@ export function WasokDashboard() {
     [collectItems, query, sortKey]
   );
 
-  const totalVisible = visibleMain.length + visibleCollect.length;
+  const visibleCompleted = React.useMemo(
+    () => sortItems(filterItems(completedItems, query), sortKey),
+    [completedItems, query, sortKey]
+  );
+
+  const totalFiltered =
+    visibleMain.length + visibleCollect.length + visibleCompleted.length;
+
+  const initialSkeleton =
+    loading &&
+    items.length === 0 &&
+    collectItems.length === 0 &&
+    completedItems.length === 0;
 
   const handleComplete = React.useCallback(
     async (item: SheetItem) => {
       const prevMain = items;
       const prevCollect = collectItems;
+      const prevDone = completedItems;
       const optimisticMain = prevMain.filter((x) => x.id !== item.id);
       const optimisticCollect = prevCollect.filter((x) => x.id !== item.id);
+      const optimisticDone = sortItems(
+        [item, ...prevDone.filter((x) => x.id !== item.id)],
+        sortKey
+      );
       setItems(optimisticMain);
       setCollectItems(optimisticCollect);
+      setCompletedItems(optimisticDone);
       setCompletingId(item.id);
 
       try {
@@ -213,17 +237,18 @@ export function WasokDashboard() {
         }
 
         toast.success("완료 폴더로 이동했습니다.", { description: item.name });
-        writeSheetCache(optimisticMain, optimisticCollect);
+        writeSheetCache(optimisticMain, optimisticCollect, optimisticDone);
       } catch (e) {
         setItems(prevMain);
         setCollectItems(prevCollect);
+        setCompletedItems(prevDone);
         const msg = e instanceof Error ? e.message : String(e);
         toast.error("완료 처리에 실패했습니다.", { description: msg });
       } finally {
         setCompletingId(null);
       }
     },
-    [items, collectItems]
+    [items, collectItems, completedItems, sortKey]
   );
 
   return (
@@ -269,71 +294,102 @@ export function WasokDashboard() {
           <SortDropdown value={sortKey} onValueChange={setSortKey} />
         </div>
 
-        {loading && items.length === 0 && collectItems.length === 0 ? (
+        {initialSkeleton ? (
           <p className="text-muted-foreground text-sm">목록을 불러오는 중입니다…</p>
-        ) : totalVisible === 0 ? (
-          <div className="border-border/60 bg-card rounded-xl border p-10 text-center shadow-sm">
-            <p className="text-muted-foreground text-sm">
-              표시할 시트가 없습니다. 검색어를 바꾸거나 새로고침 해 보세요.
-            </p>
-          </div>
         ) : (
-          <div className="space-y-10">
-            <section
-              className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
-              aria-labelledby="sec-general"
-            >
-              <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
-                <h2
-                  id="sec-general"
-                  className="text-primary border-primary/30 flex items-center gap-2 border-l-4 pl-3 text-lg font-semibold tracking-tight"
-                >
-                  일반 시트
-                </h2>
-                <span className="text-muted-foreground text-sm font-medium tabular-nums">
-                  {visibleMain.length}건
-                </span>
-              </div>
-              <div className="p-5">
-                <SheetGrid
-                  segment="general"
-                  list={visibleMain}
-                  completingId={completingId}
-                  onComplete={handleComplete}
-                  onDescriptionSaved={patchDescription}
-                />
-              </div>
-            </section>
+          <>
+            {!loading && query.trim() && totalFiltered === 0 ? (
+              <p className="text-muted-foreground mb-6 text-center text-sm">
+                검색 결과가 없습니다. 검색어를 바꿔 보세요.
+              </p>
+            ) : null}
 
-            <section
-              className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
-              aria-labelledby="sec-collect"
-            >
-              <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-emerald-50/60 px-5 py-3 dark:bg-emerald-950/25">
-                <h2
-                  id="sec-collect"
-                  className="text-emerald-900 dark:text-emerald-100 flex items-center gap-2 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
-                >
-                  취합 시트
-                  <span className="text-muted-foreground text-xs font-normal">
-                    (제목에 &quot;취합&quot; 포함)
+            <div className="space-y-10">
+              <section
+                className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
+                aria-labelledby="sec-general"
+              >
+                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
+                  <h2
+                    id="sec-general"
+                    className="text-primary border-primary/30 flex items-center gap-2 border-l-4 pl-3 text-lg font-semibold tracking-tight"
+                  >
+                    일반 시트
+                  </h2>
+                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                    {visibleMain.length}건
                   </span>
-                </h2>
-                <span className="text-muted-foreground text-sm font-medium tabular-nums">
-                  {visibleCollect.length}건
-                </span>
-              </div>
-              <div className="p-5">
-                <SheetGrid
-                  segment="collect"
-                  list={visibleCollect}
-                  completingId={completingId}
-                  onComplete={handleComplete}
-                  onDescriptionSaved={patchDescription}
-                />
-              </div>
-            </section>
-          </div>
+                </div>
+                <div className="p-5">
+                  <SheetGrid
+                    segment="general"
+                    list={visibleMain}
+                    completingId={completingId}
+                    onComplete={handleComplete}
+                    onDescriptionSaved={patchDescription}
+                  />
+                </div>
+              </section>
+
+              <section
+                className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
+                aria-labelledby="sec-collect"
+              >
+                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-emerald-50/60 px-5 py-3 dark:bg-emerald-950/25">
+                  <h2
+                    id="sec-collect"
+                    className="text-emerald-900 dark:text-emerald-100 flex items-center gap-2 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
+                  >
+                    취합 시트
+                    <span className="text-muted-foreground text-xs font-normal">
+                      (제목에 &quot;취합&quot; 포함)
+                    </span>
+                  </h2>
+                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                    {visibleCollect.length}건
+                  </span>
+                </div>
+                <div className="p-5">
+                  <SheetGrid
+                    segment="collect"
+                    list={visibleCollect}
+                    completingId={completingId}
+                    onComplete={handleComplete}
+                    onDescriptionSaved={patchDescription}
+                  />
+                </div>
+              </section>
+
+              <section
+                className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
+                aria-labelledby="sec-completed"
+              >
+                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-amber-50/70 px-5 py-3 dark:bg-amber-950/20">
+                  <h2
+                    id="sec-completed"
+                    className="text-amber-950 dark:text-amber-100 flex flex-col gap-0.5 border-l-4 border-amber-700 pl-3 text-lg font-semibold tracking-tight sm:flex-row sm:items-baseline sm:gap-2"
+                  >
+                    완료 폴더
+                    <span className="text-muted-foreground text-xs font-normal">
+                      이동한 시트는 여기서 계속 확인·설명 수정 가능합니다
+                    </span>
+                  </h2>
+                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                    {visibleCompleted.length}건
+                  </span>
+                </div>
+                <div className="p-5">
+                  <SheetGrid
+                    segment="completed"
+                    list={visibleCompleted}
+                    completingId={completingId}
+                    onComplete={handleComplete}
+                    onDescriptionSaved={patchDescription}
+                  />
+                </div>
+              </section>
+            </div>
+          </>
         )}
       </main>
     </div>

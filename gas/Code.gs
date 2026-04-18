@@ -7,7 +7,9 @@
  *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
  *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
  *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
- *   - 설명 저장: POST JSON … description 최대 4000자 → Drive setDescription
+ *   - 설명 저장: POST JSON … description 최대 300자 → Drive setDescription (완료 폴더 내 시트 포함)
+ *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 시트 목록 (하단 구역 표시용)
+ *   - 전체 Drive 검색 목록에서는 완료 폴더 안에 있는 파일은 제외(중복 방지)
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
@@ -119,6 +121,51 @@ function assertFileAllowedForHub_(file) {
   return { ok: true };
 }
 
+/**
+ * 파일의 상위 폴더 중 id 가 folderId 인 것이 있는지
+ * @param {GoogleAppsScript.Drive.File} file
+ * @param {string} folderId
+ * @returns {boolean}
+ */
+function fileIsInFolder_(file, folderId) {
+  if (!folderId) {
+    return false;
+  }
+  try {
+    var it = file.getParents();
+    while (it.hasNext()) {
+      if (it.next().getId() === folderId) {
+        return true;
+      }
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * 허브 규칙 통과 시트 또는 완료 폴더 안의 [와석초] 스프레드시트만 설명 저장 허용
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function assertFileAllowedForDescription_(file) {
+  var hub = assertFileAllowedForHub_(file);
+  if (hub.ok) {
+    return hub;
+  }
+  var folderId = getCompletedFolderId_();
+  if (
+    folderId &&
+    fileIsInFolder_(file, folderId) &&
+    file.getMimeType() === SPREADSHEET_MIME &&
+    file.getName().indexOf(REQUIRED_TITLE_MARK) !== -1
+  ) {
+    return { ok: true };
+  }
+  return hub;
+}
+
 function sortItemsByLastUpdatedDesc_(items) {
   return items.slice().sort(function (a, b) {
     if (a.lastUpdated < b.lastUpdated) return 1;
@@ -200,16 +247,42 @@ function partitionCollect_(items) {
 }
 
 /**
- * @returns {{ ok: boolean, items: Array<Object>, collectItems: Array<Object>, error?: string }}
+ * 완료 폴더 직속 파일 중 허브 규칙에 맞는 스프레드시트
+ * @returns {Array<Object>}
+ */
+function listCompletedFolderSheets_() {
+  var folderId = getCompletedFolderId_();
+  if (!folderId) {
+    return [];
+  }
+  try {
+    var folder = DriveApp.getFolderById(folderId);
+    var it = folder.getFiles();
+    var rows = [];
+    while (it.hasNext()) {
+      var f = it.next();
+      if (filePassesListRules_(f)) {
+        rows.push(fileToItem_(f));
+      }
+    }
+    return sortItemsByLastUpdatedDesc_(rows);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * @returns {{ ok: boolean, items: Array<Object>, collectItems: Array<Object>, completedItems: Array<Object>, error?: string }}
  */
 function listWasokSheets() {
   try {
+    var doneId = getCompletedFolderId_();
     var query = buildLooseSearchQuery_();
     var iterator = DriveApp.searchFiles(query);
     var passed = [];
     while (iterator.hasNext()) {
       var file = iterator.next();
-      if (filePassesListRules_(file)) {
+      if (filePassesListRules_(file) && !fileIsInFolder_(file, doneId)) {
         passed.push(fileToItem_(file));
       }
     }
@@ -217,16 +290,19 @@ function listWasokSheets() {
     var parts = partitionCollect_(sorted);
     parts.items = sortItemsByLastUpdatedDesc_(parts.items);
     parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
+    var completedItems = listCompletedFolderSheets_();
     return {
       ok: true,
       items: parts.items,
       collectItems: parts.collectItems,
+      completedItems: completedItems,
     };
   } catch (e) {
     return {
       ok: false,
       items: [],
       collectItems: [],
+      completedItems: [],
       error: String(e && e.message ? e.message : e),
     };
   }
@@ -242,14 +318,14 @@ function saveFileDescription_(fileId, description) {
   if (!fileId) {
     return { ok: false, error: 'fileId 가 필요합니다.' };
   }
-  var maxLen = 4000;
+  var maxLen = 300;
   var text = description != null ? String(description) : '';
   if (text.length > maxLen) {
     text = text.substring(0, maxLen);
   }
   try {
     var file = DriveApp.getFileById(fileId);
-    var gate = assertFileAllowedForHub_(file);
+    var gate = assertFileAllowedForDescription_(file);
     if (!gate.ok) {
       return { ok: false, error: gate.error };
     }
