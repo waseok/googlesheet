@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import { toast } from "sonner";
 import type { SheetItem, SortKey } from "@/lib/types";
 import { readSheetCache, writeSheetCache } from "@/lib/sheet-cache";
@@ -9,27 +10,26 @@ import { SortDropdown } from "@/components/SortDropdown";
 import { SheetCard } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
 
-/** 정렬·필터에 쓰는 시각(생성일 없으면 수정일로 대체) */
 function primaryTime(it: SheetItem): string {
   return it.createdTime || it.lastUpdated;
 }
 
-/**
- * 검색어로 제목·소유자를 필터링합니다(대소문자 무시).
- */
 function filterItems(items: SheetItem[], query: string): SheetItem[] {
   const q = query.trim().toLowerCase();
   if (!q) return items;
-  return items.filter(
-    (it) =>
+  return items.filter((it) => {
+    const desc = (it.description || "").toLowerCase();
+    const author = (it.author || "").toLowerCase();
+    const mail = (it.authorEmail || "").toLowerCase();
+    return (
       it.name.toLowerCase().includes(q) ||
-      (it.owner && it.owner.toLowerCase().includes(q))
-  );
+      author.includes(q) ||
+      mail.includes(q) ||
+      desc.includes(q)
+    );
+  });
 }
 
-/**
- * 정렬 키에 따라 복사본을 정렬합니다.
- */
 function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   const copy = [...items];
   switch (sortKey) {
@@ -71,13 +71,13 @@ type SheetGridProps = {
 function SheetGrid({ list, completingId, onComplete }: SheetGridProps) {
   if (list.length === 0) {
     return (
-      <p className="text-muted-foreground py-6 text-sm">
-        이 구역에 표시할 시트가 없습니다.
+      <p className="text-muted-foreground py-10 text-center text-sm">
+        표시할 시트가 없습니다.
       </p>
     );
   }
   return (
-    <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
       {list.map((item) => (
         <li key={item.id}>
           <SheetCard
@@ -92,7 +92,7 @@ function SheetGrid({ list, completingId, onComplete }: SheetGridProps) {
 }
 
 /**
- * 대시보드: 일반 / 취합 구역 분리, sessionStorage 캐시, 검색·정렬, 완료(낙관적 업데이트).
+ * 와석초 시트 허브 대시보드 — 교표·헤더, 일반/취합 구역, 검색·정렬
  */
 export function WasokDashboard() {
   const [items, setItems] = React.useState<SheetItem[]>([]);
@@ -195,91 +195,111 @@ export function WasokDashboard() {
   );
 
   return (
-    <div className="space-y-10">
-      <header className="space-y-2 border-b pb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          와석초 Sheet Hub
-        </h1>
-        <p className="text-muted-foreground max-w-2xl text-sm">
-          제목에{" "}
-          <code className="bg-muted text-foreground rounded px-1 py-0.5">
-            [와석초]
-          </code>{" "}
-          가 포함되고,{" "}
-          <strong className="text-foreground">2026년에 생성된</strong>{" "}
-          스프레드시트만 표시합니다. 제목에{" "}
-          <code className="bg-muted text-foreground rounded px-1 py-0.5">
-            취합
-          </code>
-          이 들어간 시트는 아래 &quot;취합&quot; 구역에 따로 모읍니다.
-        </p>
-        <div className="flex flex-wrap items-center gap-3 pt-2">
+    <div className="min-h-screen bg-slate-100/90 dark:bg-slate-950">
+      <header className="border-border/40 text-primary-foreground border-b bg-[#183963] shadow-md">
+        <div className="container mx-auto flex max-w-6xl flex-col gap-4 px-4 py-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-4">
+            <Image
+              src="/waseok-logo.png"
+              alt="와석초등학교 교표"
+              width={56}
+              height={56}
+              className="ring-background/20 size-14 shrink-0 rounded-full object-cover shadow-md ring-2"
+              priority
+            />
+            <div>
+              <p className="text-primary-foreground/85 text-sm font-medium tracking-wide">
+                업무용 시트 관리
+              </p>
+              <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+                와석초등학교{" "}
+                <span className="text-primary-foreground/90 font-semibold">
+                  시트 허브
+                </span>
+              </h1>
+            </div>
+          </div>
           <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             disabled={loading}
             onClick={() => void loadSheets({ force: true })}
+            className="shrink-0 self-start sm:self-center"
           >
             {loading ? "불러오는 중…" : "새로고침"}
           </Button>
-          <span className="text-muted-foreground text-sm">
-            캐시 TTL 5분 · GAS에서 연도·키워드 필터
-          </span>
         </div>
       </header>
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <SearchBar value={query} onChange={setQuery} />
-        <SortDropdown value={sortKey} onValueChange={setSortKey} />
-      </div>
+      <main className="container mx-auto max-w-6xl px-4 py-8">
+        <div className="border-border/60 bg-background/95 mb-8 flex flex-col gap-4 rounded-xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <SearchBar value={query} onChange={setQuery} />
+          <SortDropdown value={sortKey} onValueChange={setSortKey} />
+        </div>
 
-      {loading && items.length === 0 && collectItems.length === 0 ? (
-        <p className="text-muted-foreground text-sm">목록을 불러오는 중입니다…</p>
-      ) : totalVisible === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          표시할 시트가 없습니다. 검색어를 바꾸거나 새로고침 해 보세요.
-        </p>
-      ) : (
-        <>
-          <section className="space-y-3" aria-labelledby="sec-general">
-            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
-              <h2
-                id="sec-general"
-                className="text-lg font-medium tracking-tight"
-              >
-                일반
-              </h2>
-              <span className="text-muted-foreground text-sm">
-                {visibleMain.length}건
-              </span>
-            </div>
-            <SheetGrid
-              list={visibleMain}
-              completingId={completingId}
-              onComplete={handleComplete}
-            />
-          </section>
+        {loading && items.length === 0 && collectItems.length === 0 ? (
+          <p className="text-muted-foreground text-sm">목록을 불러오는 중입니다…</p>
+        ) : totalVisible === 0 ? (
+          <div className="border-border/60 bg-card rounded-xl border p-10 text-center shadow-sm">
+            <p className="text-muted-foreground text-sm">
+              표시할 시트가 없습니다. 검색어를 바꾸거나 새로고침 해 보세요.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-10">
+            <section
+              className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
+              aria-labelledby="sec-general"
+            >
+              <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
+                <h2
+                  id="sec-general"
+                  className="text-primary border-primary/30 flex items-center gap-2 border-l-4 pl-3 text-lg font-semibold tracking-tight"
+                >
+                  일반 시트
+                </h2>
+                <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                  {visibleMain.length}건
+                </span>
+              </div>
+              <div className="p-5">
+                <SheetGrid
+                  list={visibleMain}
+                  completingId={completingId}
+                  onComplete={handleComplete}
+                />
+              </div>
+            </section>
 
-          <section className="space-y-3" aria-labelledby="sec-collect">
-            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
-              <h2
-                id="sec-collect"
-                className="text-lg font-medium tracking-tight"
-              >
-                취합 (제목에 &quot;취합&quot; 포함)
-              </h2>
-              <span className="text-muted-foreground text-sm">
-                {visibleCollect.length}건
-              </span>
-            </div>
-            <SheetGrid
-              list={visibleCollect}
-              completingId={completingId}
-              onComplete={handleComplete}
-            />
-          </section>
-        </>
-      )}
+            <section
+              className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
+              aria-labelledby="sec-collect"
+            >
+              <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-emerald-50/60 px-5 py-3 dark:bg-emerald-950/25">
+                <h2
+                  id="sec-collect"
+                  className="text-emerald-900 dark:text-emerald-100 flex items-center gap-2 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
+                >
+                  취합 시트
+                  <span className="text-muted-foreground text-xs font-normal">
+                    (제목에 &quot;취합&quot; 포함)
+                  </span>
+                </h2>
+                <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                  {visibleCollect.length}건
+                </span>
+              </div>
+              <div className="p-5">
+                <SheetGrid
+                  list={visibleCollect}
+                  completingId={completingId}
+                  onComplete={handleComplete}
+                />
+              </div>
+            </section>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

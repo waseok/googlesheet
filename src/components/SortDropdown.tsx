@@ -24,17 +24,23 @@ const LABELS: Record<SortKey, string> = {
   name_desc: "이름 · 역순",
 };
 
+/** Select 트리거에 한글 라벨이 보이도록 items 맵 제공 */
+const ITEMS_MAP: Record<string, string> = LABELS;
+
 /**
- * 클라이언트에서만 동작하는 정렬 선택입니다.
- * 서버 재요청 없이 각 구역의 배열을 정렬해 보여줍니다.
+ * 정렬 선택 — 트리거에도 항상 한글 라벨이 나오도록 items 를 넘깁니다.
  */
 export function SortDropdown({ value, onValueChange }: SortDropdownProps) {
   return (
     <Select
+      items={ITEMS_MAP}
       value={value}
       onValueChange={(v) => onValueChange(v as SortKey)}
     >
-      <SelectTrigger className="w-[220px]" aria-label="정렬 기준">
+      <SelectTrigger
+        className="border-border/80 bg-background/90 h-10 min-w-[220px] shadow-sm"
+        aria-label="정렬 기준"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

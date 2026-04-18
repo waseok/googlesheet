@@ -1,7 +1,8 @@
 import type { SheetItem } from "@/lib/types";
+import { normalizeGasSheetItem } from "@/lib/normalize-sheet-item";
 
 /** 스키마 변경 시 키만 올리면 이전 캐시 무시 */
-const CACHE_KEY = "wasok_sheets_cache_v2";
+const CACHE_KEY = "wasok_sheets_cache_v3";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -10,6 +11,15 @@ type CachePayload = {
   items: SheetItem[];
   collectItems: SheetItem[];
 };
+
+function normalizeCachedList(raw: unknown[]): SheetItem[] {
+  const out: SheetItem[] = [];
+  for (const row of raw) {
+    const item = normalizeGasSheetItem(row);
+    if (item) out.push(item);
+  }
+  return out;
+}
 
 /**
  * 일반 목록 + 취합 목록을 함께 캐시합니다.
@@ -34,9 +44,9 @@ export function readSheetCache(): {
       return { items: [], collectItems: [], fresh: false };
     }
     return {
-      items: parsed.items as SheetItem[],
+      items: normalizeCachedList(parsed.items),
       collectItems: Array.isArray(parsed.collectItems)
-        ? (parsed.collectItems as SheetItem[])
+        ? normalizeCachedList(parsed.collectItems)
         : [],
       fresh: true,
     };

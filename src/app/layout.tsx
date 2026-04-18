@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "와석초 Sheet Hub",
-  description: "[와석초] 구글 시트 목록과 완료 폴더 이동을 한곳에서 관리합니다.",
+  title: "와석초등학교 시트 허브",
+  description:
+    "와석초등학교 업무용 구글 시트를 한곳에서 찾고, 완료 시 지정 폴더로 이동합니다.",
 };
 
 export default function RootLayout({
@@ -29,7 +30,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
+      <body className="flex min-h-full flex-col antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>

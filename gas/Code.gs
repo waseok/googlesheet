@@ -6,6 +6,7 @@
  *   - 제목에 대괄호 포함 문자열 "[와석초]" 가 정확히 들어간 스프레드시트만 (와석초 단독 제외)
  *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
  *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
+ *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
@@ -126,21 +127,54 @@ function sortItemsByLastUpdatedDesc_(items) {
 }
 
 /**
+ * 작성자 표시: Drive User.getName() 우선, 없으면 이메일 @ 앞부분
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {{ author: string, authorEmail: string }}
+ */
+function resolveAuthorFields_(file) {
+  var authorEmail = '';
+  var authorName = '';
+  try {
+    var owner = file.getOwner();
+    try {
+      authorEmail = owner.getEmail() || '';
+    } catch (e0) {}
+    try {
+      authorName = owner.getName() || '';
+    } catch (e1) {}
+  } catch (err) {
+    return { author: '', authorEmail: '' };
+  }
+  var author = '';
+  if (authorName && String(authorName).trim().length > 0) {
+    author = String(authorName).trim();
+  } else if (authorEmail && authorEmail.indexOf('@') !== -1) {
+    author = authorEmail.split('@')[0];
+  } else if (authorEmail) {
+    author = authorEmail;
+  }
+  return { author: author, authorEmail: authorEmail };
+}
+
+/**
  * @param {GoogleAppsScript.Drive.File} file
  * @returns {Object}
  */
 function fileToItem_(file) {
-  var ownerEmail = '';
+  var auth = resolveAuthorFields_(file);
+  var desc = '';
   try {
-    ownerEmail = file.getOwner().getEmail();
-  } catch (err) {
-    ownerEmail = '';
+    desc = file.getDescription() || '';
+  } catch (e2) {
+    desc = '';
   }
   return {
     id: file.getId(),
     name: file.getName(),
     url: file.getUrl(),
-    owner: ownerEmail,
+    author: auth.author,
+    authorEmail: auth.authorEmail,
+    description: desc,
     lastUpdated: file.getLastUpdated().toISOString(),
     createdTime: file.getDateCreated().toISOString(),
   };

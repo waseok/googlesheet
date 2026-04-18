@@ -5,7 +5,12 @@ export interface SheetItem {
   id: string;
   name: string;
   url: string;
-  owner: string;
+  /** 표시용 작성자 이름 (GAS: 소유자 getName 우선) */
+  author: string;
+  /** 툴팁·접근성용(있을 때만) */
+  authorEmail?: string;
+  /** Drive 파일 설명(getDescription) */
+  description?: string;
   lastUpdated: string;
   /** 생성 시각(ISO). GAS에서 getDateCreated 기준 */
   createdTime?: string;

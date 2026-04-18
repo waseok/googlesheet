@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
 import type { GasListResponse, SheetItem } from "@/lib/types";
 import { requireGasWebAppUrl } from "@/lib/gas-config";
+import { normalizeGasSheetItem } from "@/lib/normalize-sheet-item";
+
+function normalizeList(raw: unknown): SheetItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SheetItem[] = [];
+  for (const row of raw) {
+    const item = normalizeGasSheetItem(row);
+    if (item) out.push(item);
+  }
+  return out;
+}
 
 /**
  * GAS 목록을 프록시합니다. 브라우저는 이 엔드포인트만 호출합니다.
@@ -69,10 +80,8 @@ export async function GET() {
     );
   }
 
-  const items: SheetItem[] = Array.isArray(parsed.items) ? parsed.items : [];
-  const collectItems: SheetItem[] = Array.isArray(parsed.collectItems)
-    ? parsed.collectItems
-    : [];
+  const items = normalizeList(parsed.items);
+  const collectItems = normalizeList(parsed.collectItems);
 
   return NextResponse.json({
     ok: parsed.ok !== false,
