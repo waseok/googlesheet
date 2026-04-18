@@ -4,7 +4,7 @@ import * as React from "react";
 import Image from "next/image";
 import { toast } from "sonner";
 import type { SheetItem, SortKey } from "@/lib/types";
-import { readSheetCache, writeSheetCache } from "@/lib/sheet-cache";
+import { readSheetCacheStaleOk, writeSheetCache } from "@/lib/sheet-cache";
 import { SearchBar } from "@/components/SearchBar";
 import { SortDropdown } from "@/components/SortDropdown";
 import { CompletedFolderList } from "@/components/CompletedFolderList";
@@ -139,18 +139,25 @@ export function WasokDashboard() {
   );
 
   const loadSheets = React.useCallback(async (opts: { force: boolean }) => {
-    if (!opts.force) {
-      const cached = readSheetCache();
-      if (cached.fresh) {
-        setItems(cached.items);
-        setCollectItems(cached.collectItems);
-        setCompletedItems(cached.completedItems);
-        setLoading(false);
+    const peek = readSheetCacheStaleOk();
+
+    // 캐시가 있으면 즉시 화면에 반영 (만료됐어도 stale-while-revalidate)
+    if (!opts.force && peek.fromStorage) {
+      setItems(peek.items);
+      setCollectItems(peek.collectItems);
+      setCompletedItems(peek.completedItems);
+      setLoading(false);
+      if (peek.fresh) {
         return;
       }
     }
 
-    setLoading(true);
+    // 첫 방문·강제 새로고침: 캐시 없을 때만 전체 로딩 스피너
+    const showBlockingSpinner = opts.force || !peek.fromStorage;
+    if (showBlockingSpinner) {
+      setLoading(true);
+    }
+
     try {
       const res = await fetch("/api/sheets", { cache: "no-store" });
       const data = (await res.json()) as {
@@ -175,9 +182,11 @@ export function WasokDashboard() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error("목록을 불러오지 못했습니다.", { description: msg });
-      setItems([]);
-      setCollectItems([]);
-      setCompletedItems([]);
+      if (!peek.fromStorage) {
+        setItems([]);
+        setCollectItems([]);
+        setCompletedItems([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -428,7 +437,7 @@ export function WasokDashboard() {
                   >
                     완료 폴더
                     <span className="text-muted-foreground text-xs font-normal">
-                      칸을 누르면 정보가 펼쳐지고, 되돌리기로 원래 구역으로
+                      제목을 누르면 시트가 열리고, 되돌리기로 원래 구역으로
                       복귀합니다
                     </span>
                   </h2>
