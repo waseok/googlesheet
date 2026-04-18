@@ -14,6 +14,7 @@
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
  *   - LIST_YEAR (선택, 기본 2026) — 생성 연도 필터
+ *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 실행 계정 My Drive 루트
  *
  * Drive 검색은 title contains '와석초' 로 후보를 넓게 가져온 뒤, 스크립트에서 위 규칙으로 엄격 필터합니다.
  * (쿼리만 title contains '[와석초]' 로 두면 Drive 쪽에서 대괄호 해석이 달라질 수 있어 후보+필터 방식을 씁니다.)
@@ -39,6 +40,40 @@ function getCompletedFolderId_() {
     return id;
   }
   return DEFAULT_COMPLETED_FOLDER_ID || '';
+}
+
+/**
+ * 되돌리기 대상 폴더 (RESTORE_FOLDER_ID 없으면 루트)
+ * @returns {GoogleAppsScript.Drive.Folder}
+ */
+function getRestoreTargetFolder_() {
+  var id = PropertiesService.getScriptProperties().getProperty('RESTORE_FOLDER_ID');
+  if (id && id.length > 0) {
+    return DriveApp.getFolderById(id);
+  }
+  return DriveApp.getRootFolder();
+}
+
+/**
+ * 완료 폴더에 있는 [와석초] 스프레드시트만 되돌리기 허용(생성연도 무관)
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function assertRestoreAllowed_(file) {
+  var completedId = getCompletedFolderId_();
+  if (!completedId) {
+    return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
+  }
+  if (!fileIsInFolder_(file, completedId)) {
+    return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
+  }
+  if (file.getMimeType() !== SPREADSHEET_MIME) {
+    return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
+  }
+  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) {
+    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
+  }
+  return { ok: true };
 }
 
 function getMutationToken_() {
@@ -369,6 +404,33 @@ function moveFileToCompleted(fileId) {
   }
 }
 
+/**
+ * 완료 폴더에서 복원 폴더(또는 루트)로 이동
+ * @param {string} fileId
+ * @returns {{ ok: boolean, message?: string, id?: string, error?: string }}
+ */
+function restoreFileFromCompleted(fileId) {
+  if (!fileId) {
+    return { ok: false, error: 'fileId 가 필요합니다.' };
+  }
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var gate = assertRestoreAllowed_(file);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
+    }
+    var dest = getRestoreTargetFolder_();
+    var parents = file.getParents();
+    while (parents.hasNext()) {
+      parents.next().removeFile(file);
+    }
+    dest.addFile(file);
+    return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+}
+
 function jsonOutput_(payload) {
   var out = ContentService.createTextOutput(JSON.stringify(payload));
   out.setMimeType(ContentService.MimeType.JSON);
@@ -386,6 +448,15 @@ function doGet(e) {
     }
     var fileId = params.fileId || '';
     return jsonOutput_(moveFileToCompleted(fileId));
+  }
+
+  if (action === 'restore') {
+    var gateR = assertMutationAllowed_(params.token || '');
+    if (!gateR.ok) {
+      return jsonOutput_(gateR);
+    }
+    var rid = params.fileId || '';
+    return jsonOutput_(restoreFileFromCompleted(rid));
   }
 
   return jsonOutput_(listWasokSheets());
@@ -411,6 +482,11 @@ function doPost(e) {
     var sid = body.fileId || '';
     var sdesc = body.description != null ? body.description : '';
     return jsonOutput_(saveFileDescription_(sid, sdesc));
+  }
+
+  if (action === 'restore') {
+    var rid2 = body.fileId || '';
+    return jsonOutput_(restoreFileFromCompleted(rid2));
   }
 
   var fileId = body.fileId || (e.parameter && e.parameter.fileId) || '';

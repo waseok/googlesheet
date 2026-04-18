@@ -7,6 +7,7 @@ import type { SheetItem, SortKey } from "@/lib/types";
 import { readSheetCache, writeSheetCache } from "@/lib/sheet-cache";
 import { SearchBar } from "@/components/SearchBar";
 import { SortDropdown } from "@/components/SortDropdown";
+import { CompletedFolderList } from "@/components/CompletedFolderList";
 import { SheetCard, type SheetCardSegment } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
 
@@ -85,7 +86,7 @@ function SheetGrid({
     );
   }
   return (
-    <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {list.map((item) => (
         <li key={item.id}>
           <SheetCard
@@ -112,6 +113,7 @@ export function WasokDashboard() {
   const [query, setQuery] = React.useState("");
   const [sortKey, setSortKey] = React.useState<SortKey>("created_desc");
   const [completingId, setCompletingId] = React.useState<string | null>(null);
+  const [restoringId, setRestoringId] = React.useState<string | null>(null);
 
   const itemsRef = React.useRef(items);
   const collectRef = React.useRef(collectItems);
@@ -251,6 +253,60 @@ export function WasokDashboard() {
     [items, collectItems, completedItems, sortKey]
   );
 
+  const handleRestore = React.useCallback(
+    async (item: SheetItem) => {
+      const prevMain = items;
+      const prevCollect = collectItems;
+      const prevDone = completedItems;
+      /** GAS와 동일: 제목에 "취합"이 있으면 취합 구역으로 복귀 */
+      const isCollect = item.name.includes("취합");
+
+      const withoutDone = prevDone.filter((x) => x.id !== item.id);
+      const optimisticMain = isCollect
+        ? prevMain
+        : sortItems(
+            [item, ...prevMain.filter((x) => x.id !== item.id)],
+            sortKey
+          );
+      const optimisticCollect = isCollect
+        ? sortItems(
+            [item, ...prevCollect.filter((x) => x.id !== item.id)],
+            sortKey
+          )
+        : prevCollect;
+
+      setItems(optimisticMain);
+      setCollectItems(optimisticCollect);
+      setCompletedItems(withoutDone);
+      setRestoringId(item.id);
+
+      try {
+        const res = await fetch("/api/sheets/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileId: item.id }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string };
+
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        toast.success("완료 폴더에서 꺼냈습니다.", { description: item.name });
+        writeSheetCache(optimisticMain, optimisticCollect, withoutDone);
+      } catch (e) {
+        setItems(prevMain);
+        setCollectItems(prevCollect);
+        setCompletedItems(prevDone);
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.error("되돌리기에 실패했습니다.", { description: msg });
+      } finally {
+        setRestoringId(null);
+      }
+    },
+    [items, collectItems, completedItems, sortKey]
+  );
+
   return (
     <div className="min-h-screen bg-slate-100/90 dark:bg-slate-950">
       <header className="border-border/40 text-primary-foreground border-b bg-[#183963] shadow-md">
@@ -371,20 +427,19 @@ export function WasokDashboard() {
                   >
                     완료 폴더
                     <span className="text-muted-foreground text-xs font-normal">
-                      이동한 시트는 여기서 계속 확인·설명 수정 가능합니다
+                      제목을 누르면 시트가 열리고, 되돌리기로 원래 구역으로
+                      복귀합니다
                     </span>
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">
                     {visibleCompleted.length}건
                   </span>
                 </div>
-                <div className="p-5">
-                  <SheetGrid
-                    segment="completed"
-                    list={visibleCompleted}
-                    completingId={completingId}
-                    onComplete={handleComplete}
-                    onDescriptionSaved={patchDescription}
+                <div className="p-4 sm:p-5">
+                  <CompletedFolderList
+                    items={visibleCompleted}
+                    restoringId={restoringId}
+                    onRestore={handleRestore}
                   />
                 </div>
               </section>

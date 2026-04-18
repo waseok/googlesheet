@@ -36,6 +36,9 @@ export interface GasCompleteResponse {
   error?: string;
 }
 
+/** GAS `restoreFileFromCompleted` — 필드 형태가 완료 이동과 동일합니다. */
+export type GasRestoreResponse = GasCompleteResponse;
+
 /** GAS 설명 저장 응답 */
 export interface GasDescriptionResponse {
   ok: boolean;

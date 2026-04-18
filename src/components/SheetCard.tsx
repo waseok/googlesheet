@@ -11,7 +11,6 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import {
-  Archive,
   CalendarDays,
   Clock,
   FileSpreadsheet,
@@ -23,7 +22,8 @@ import { toast } from "sonner";
 
 const DESC_MAX = 300;
 
-export type SheetCardSegment = "general" | "collect" | "completed";
+/** 일반 / 취합 구역에서만 사용합니다. */
+export type SheetCardSegment = "general" | "collect";
 
 type SheetCardProps = {
   /** 일반 시트 / 취합 시트 — 헤더 아이콘 구분 */
@@ -34,12 +34,12 @@ type SheetCardProps = {
   onDescriptionSaved: (id: string, description: string) => void;
 };
 
-function formatKo(iso?: string, fallback = ""): string {
+/** 짧은 표기 — 카드 한 줄 메타에 사용 */
+function formatKoShort(iso?: string, fallback = "—"): string {
   if (!iso) return fallback;
   try {
     return new Date(iso).toLocaleString("ko-KR", {
-      year: "numeric",
-      month: "short",
+      month: "numeric",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
@@ -53,22 +53,14 @@ function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
   if (segment === "collect") {
     return (
       <Layers
-        className="text-emerald-700 dark:text-emerald-400 size-7 shrink-0"
-        aria-hidden
-      />
-    );
-  }
-  if (segment === "completed") {
-    return (
-      <Archive
-        className="text-amber-800 dark:text-amber-400 size-7 shrink-0"
+        className="text-emerald-700 dark:text-emerald-400 size-5 shrink-0"
         aria-hidden
       />
     );
   }
   return (
     <FileSpreadsheet
-      className="text-sky-700 dark:text-sky-400 size-7 shrink-0"
+      className="text-sky-700 dark:text-sky-400 size-5 shrink-0"
       aria-hidden
     />
   );
@@ -76,6 +68,7 @@ function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
 
 /**
  * 시트 한 건 — 일반/취합 아이콘, 작성자·날짜·설명(Drive 동기화)
+ * 레이아웃은 목록 스캔이 쉽도록 한 줄 메타 + 접을 수 있는 설명 영역입니다.
  */
 export function SheetCard({
   segment,
@@ -92,11 +85,11 @@ export function SheetCard({
   }, [item.id, item.description]);
 
   const updated = React.useMemo(
-    () => formatKo(item.lastUpdated),
+    () => formatKoShort(item.lastUpdated),
     [item.lastUpdated]
   );
   const created = React.useMemo(
-    () => formatKo(item.createdTime, "—"),
+    () => formatKoShort(item.createdTime, "—"),
     [item.createdTime]
   );
 
@@ -135,11 +128,17 @@ export function SheetCard({
   };
 
   const dirty = draft !== (item.description || "");
+  const descPreview =
+    (item.description || "").trim().slice(0, 36) +
+    ((item.description || "").trim().length > 36 ? "…" : "");
 
   return (
-    <Card className="border-border/70 shadow-sm transition-shadow hover:shadow-md">
-      <CardHeader className="border-border/50 border-b bg-slate-50/80 pb-3 pt-2 dark:bg-slate-900/40">
-        <div className="flex items-center justify-center gap-2.5 px-1">
+    <Card
+      size="sm"
+      className="border-border/70 shadow-sm transition-shadow hover:shadow-md"
+    >
+      <CardHeader className="border-border/50 border-b bg-slate-50/80 py-2.5 dark:bg-slate-900/40">
+        <div className="flex items-center gap-2 px-0.5">
           <SegmentIcon segment={segment} />
           <a
             href={item.url}
@@ -147,7 +146,7 @@ export function SheetCard({
             rel="noopener noreferrer"
             className={cn(
               "text-primary hover:text-primary/85 focus-visible:ring-ring",
-              "min-w-0 flex-1 rounded-md py-0.5 text-center text-lg leading-snug font-semibold tracking-tight sm:text-xl",
+              "min-w-0 flex-1 rounded-md py-0.5 text-left text-base leading-snug font-semibold tracking-tight sm:text-lg",
               "outline-none transition-colors focus-visible:ring-2 focus-visible:ring-offset-2",
               "line-clamp-2 hover:underline"
             )}
@@ -156,99 +155,102 @@ export function SheetCard({
           </a>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3 pt-4">
-        <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <span
-            className="inline-flex items-center gap-1.5"
-            title={authorTitle}
-          >
-            <UserRound className="text-primary/70 size-3.5 shrink-0" />
-            <span className="text-foreground font-medium">작성자</span>
-            {authorLabel}
+      <CardContent className="space-y-2 pt-2.5">
+        {/* 작성자 · 생성 · 수정 — 한 줄로 압축 */}
+        <p
+          className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-tight"
+          title={authorTitle}
+        >
+          <UserRound className="text-primary/60 size-3 shrink-0" aria-hidden />
+          <span className="text-foreground/90 font-medium">{authorLabel}</span>
+          <span className="text-muted-foreground/70" aria-hidden>
+            ·
           </span>
-        </div>
-        <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
-          <span className="inline-flex items-center gap-1">
-            <CalendarDays className="size-3.5 shrink-0 opacity-70" />
-            생성 {created}
+          <CalendarDays className="size-3 shrink-0 opacity-70" aria-hidden />
+          <span>생성 {created}</span>
+          <span className="text-muted-foreground/70" aria-hidden>
+            ·
           </span>
-          <span className="inline-flex items-center gap-1">
-            <Clock className="size-3.5 shrink-0 opacity-70" />
-            수정 {updated}
-          </span>
-        </div>
-        <div>
-          <div className="text-muted-foreground mb-1.5 flex items-center justify-between gap-2">
-            <span className="text-xs font-medium tracking-wide uppercase">
-              설명
-            </span>
-            <span className="text-muted-foreground/80 text-xs tabular-nums">
-              {draft.length} / {DESC_MAX}
-            </span>
-          </div>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value.slice(0, DESC_MAX))}
-            maxLength={DESC_MAX}
-            rows={2}
-            placeholder="용도·담당·기한 등을 짧게 적어 주세요."
-            className={cn(
-              "border-input bg-background ring-offset-background placeholder:text-muted-foreground",
-              "focus-visible:ring-ring max-h-[4.25rem] min-h-[2.75rem] w-full resize-y rounded-md border px-2.5 py-1.5 text-sm leading-snug shadow-sm",
-              "focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
-              "disabled:cursor-not-allowed disabled:opacity-50"
-            )}
-            disabled={savingDesc}
-            aria-label="시트 설명"
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={savingDesc || !dirty}
-              onClick={() => void saveDescription()}
-              className="inline-flex gap-1.5"
-            >
-              {savingDesc ? (
-                <>
-                  <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
-                  저장 중…
-                </>
-              ) : (
-                "설명 저장"
-              )}
-            </Button>
-            {dirty ? (
-              <span className="text-muted-foreground text-xs">
-                저장 전까지 Drive에는 반영되지 않습니다.
+          <Clock className="size-3 shrink-0 opacity-70" aria-hidden />
+          <span>수정 {updated}</span>
+        </p>
+
+        {/* 접혀 있으면 카드 높이가 줄어들어 목록 스캔이 쉬움 */}
+        <details className="border-border/60 bg-muted/15 group/desc rounded-md border open:bg-background/80">
+          <summary className="text-muted-foreground hover:text-foreground cursor-pointer list-none px-2 py-1.5 text-xs font-medium select-none [&::-webkit-details-marker]:hidden">
+            <span className="inline-flex w-full items-center justify-between gap-2">
+              <span>설명</span>
+              <span className="text-muted-foreground/80 max-w-[65%] truncate font-normal tabular-nums">
+                {descPreview || "없음"}
               </span>
-            ) : null}
+            </span>
+          </summary>
+          <div className="border-border/50 space-y-1.5 border-t px-2 py-2">
+            <div className="text-muted-foreground/80 flex justify-end text-[10px] tabular-nums">
+              {draft.length} / {DESC_MAX}
+            </div>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value.slice(0, DESC_MAX))}
+              maxLength={DESC_MAX}
+              rows={2}
+              placeholder="용도·담당·기한 등을 짧게 적어 주세요."
+              className={cn(
+                "border-input bg-background ring-offset-background placeholder:text-muted-foreground",
+                "focus-visible:ring-ring max-h-[3.5rem] min-h-[2.25rem] w-full resize-y rounded-md border px-2 py-1 text-xs leading-snug shadow-sm",
+                "focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
+                "disabled:cursor-not-allowed disabled:opacity-50"
+              )}
+              disabled={savingDesc}
+              aria-label="시트 설명"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={savingDesc || !dirty}
+                onClick={() => void saveDescription()}
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                {savingDesc ? (
+                  <>
+                    <Loader2Icon className="size-3 shrink-0 animate-spin" />
+                    저장 중…
+                  </>
+                ) : (
+                  "설명 저장"
+                )}
+              </Button>
+              {dirty ? (
+                <span className="text-muted-foreground text-[10px] leading-tight">
+                  저장 전까지 Drive에는 반영되지 않습니다.
+                </span>
+              ) : null}
+            </div>
           </div>
-        </div>
+        </details>
       </CardContent>
-      <CardFooter className="bg-muted/20 flex flex-wrap gap-2 border-t pt-4">
+      <CardFooter className="bg-muted/15 flex flex-wrap gap-1.5 border-t py-2.5">
         <a
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
           className={cn(
             buttonVariants({ size: "sm" }),
-            "border-transparent bg-sky-600 text-white shadow-sm hover:bg-sky-700"
+            "h-7 border-transparent bg-sky-600 px-2.5 text-xs text-white shadow-sm hover:bg-sky-700"
           )}
         >
           시트 열기
         </a>
-        {segment !== "completed" ? (
-          <Button
-            size="sm"
-            disabled={completing}
-            onClick={() => onComplete(item)}
-            className="border-transparent bg-red-600 text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
-          >
-            {completing ? "처리 중…" : "완료 처리"}
-          </Button>
-        ) : null}
+        <Button
+          size="sm"
+          disabled={completing}
+          onClick={() => onComplete(item)}
+          className="h-7 border-transparent bg-red-600 px-2.5 text-xs text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
+        >
+          {completing ? "처리 중…" : "완료 처리"}
+        </Button>
       </CardFooter>
     </Card>
   );
