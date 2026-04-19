@@ -104,7 +104,7 @@ function SheetGrid({
 }
 
 /**
- * 와석초 시트 허브 — 일반 / 취합 / 완료 폴더(하단)
+ * 와석초 시트 허브 — 정보 시트 / 취합 / 완료 폴더(하단)
  */
 export function WasokDashboard() {
   const [items, setItems] = React.useState<SheetItem[]>([]);
@@ -268,7 +268,7 @@ export function WasokDashboard() {
       const prevMain = items;
       const prevCollect = collectItems;
       const prevDone = completedItems;
-      /** GAS와 동일: 제목에 "취합"이 있으면 취합 구역으로 복귀 */
+      /** GAS와 동일: "취합"이 있으면 취합 구역, 아니면 정보(items) 구역(구 규칙 시트 포함) */
       const isCollect = item.name.includes("취합");
 
       const withoutDone = prevDone.filter((x) => x.id !== item.id);
@@ -373,14 +373,17 @@ export function WasokDashboard() {
             <div className="space-y-10">
               <section
                 className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
-                aria-labelledby="sec-general"
+                aria-labelledby="sec-info"
               >
                 <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
                   <h2
-                    id="sec-general"
+                    id="sec-info"
                     className="text-primary border-primary/30 flex items-center gap-2 border-l-4 pl-3 text-lg font-semibold tracking-tight"
                   >
-                    일반 시트
+                    정보 시트
+                    <span className="text-muted-foreground text-xs font-normal">
+                      (제목에 &quot;정보&quot; 포함, &quot;취합&quot; 없음)
+                    </span>
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">
                     {visibleMain.length}건
@@ -388,7 +391,7 @@ export function WasokDashboard() {
                 </div>
                 <div className="p-5">
                   <SheetGrid
-                    segment="general"
+                    segment="info"
                     list={visibleMain}
                     completingId={completingId}
                     onComplete={handleComplete}

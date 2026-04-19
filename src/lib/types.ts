@@ -19,9 +19,9 @@ export interface SheetItem {
 /** GAS `listWasokSheets` 응답 */
 export interface GasListResponse {
   ok: boolean;
-  /** 제목에 "취합"이 없는 시트(완료 폴더 제외) */
+  /** 제목에 "정보" 포함·"취합" 없음(완료 폴더 제외) — 정보 시트 구역 */
   items: SheetItem[];
-  /** 제목에 "취합"이 포함된 시트(완료 폴더 제외) */
+  /** 제목에 "취합" 포함(완료 폴더 제외) */
   collectItems: SheetItem[];
   /** 완료 폴더 안 시트 */
   completedItems: SheetItem[];

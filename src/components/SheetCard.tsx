@@ -13,7 +13,7 @@ import {
 import {
   CalendarDays,
   Clock,
-  FileSpreadsheet,
+  Info,
   Layers,
   Loader2Icon,
   UserRound,
@@ -22,11 +22,11 @@ import { toast } from "sonner";
 
 const DESC_MAX = 300;
 
-/** 일반 / 취합 구역에서만 사용합니다. */
-export type SheetCardSegment = "general" | "collect";
+/** 정보 시트 / 취합 시트 구역에서만 사용합니다. */
+export type SheetCardSegment = "info" | "collect";
 
 type SheetCardProps = {
-  /** 일반 시트 / 취합 시트 — 헤더 아이콘 구분 */
+  /** 정보 시트 / 취합 시트 — 헤더 아이콘 구분 */
   segment: SheetCardSegment;
   item: SheetItem;
   completing: boolean;
@@ -59,7 +59,7 @@ function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
     );
   }
   return (
-    <FileSpreadsheet
+    <Info
       className="text-sky-700 dark:text-sky-400 size-5 shrink-0"
       aria-hidden
     />
@@ -67,7 +67,7 @@ function SegmentIcon({ segment }: { segment: SheetCardSegment }) {
 }
 
 /**
- * 시트 한 건 — 일반/취합 아이콘, 작성자·날짜·설명(Drive 동기화)
+ * 시트 한 건 — 정보/취합 아이콘, 작성자·날짜·설명(Drive 동기화)
  * 레이아웃은 목록 스캔이 쉽도록 한 줄 메타 + 접을 수 있는 설명 영역입니다.
  */
 export function SheetCard({

@@ -5,7 +5,8 @@
  * 목록 규칙:
  *   - 제목에 대괄호 포함 문자열 "[와석초]" 가 정확히 들어간 스프레드시트만 (와석초 단독 제외)
  *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
- *   - 제목에 "취합"이 있으면 collectItems 로, 없으면 items 로 분리 반환
+ *   - 제목에 "취합"이 있으면 collectItems 로
+ *   - 그 외 중 제목에 "정보"가 있으면 items(정보 시트 구역)로. 둘 다 없으면 허브 목록에 표시하지 않음
  *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
  *   - 설명 저장: POST JSON … description 최대 300자 → Drive setDescription (완료 폴더 내 시트 포함)
  *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 시트 목록 (하단 구역 표시용)
@@ -29,8 +30,11 @@ var DEFAULT_LIST_YEAR = 2026;
 /** 제목에 반드시 포함되어야 하는 문자열(대괄호 포함) */
 var REQUIRED_TITLE_MARK = '[와석초]';
 
-/** 제목에 포함되면 "취합" 구역으로 분류 */
+/** 제목에 포함되면 "취합" 구역으로 분류(정보와 동시에 있으면 취합 우선) */
 var COLLECT_MARK = '취합';
+
+/** 제목에 포함되면 "정보 시트" 구역(items)으로 분류 — 취합이 없을 때만 */
+var INFO_MARK = '정보';
 
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 
@@ -264,21 +268,23 @@ function fileToItem_(file) {
 }
 
 /**
- * @param {Array<Object>} items name 필드 기준
+ * 제목 키워드로 구역 분리 — 취합 우선, 다음 정보
+ * @param {Array<Object>} rows name 필드 기준
  * @returns {{ items: Array<Object>, collectItems: Array<Object> }}
  */
-function partitionCollect_(items) {
-  var general = [];
+function partitionByTitleMarks_(rows) {
+  var infoItems = [];
   var collect = [];
-  for (var i = 0; i < items.length; i++) {
-    var row = items[i];
-    if (row.name.indexOf(COLLECT_MARK) !== -1) {
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var n = row.name;
+    if (n.indexOf(COLLECT_MARK) !== -1) {
       collect.push(row);
-    } else {
-      general.push(row);
+    } else if (n.indexOf(INFO_MARK) !== -1) {
+      infoItems.push(row);
     }
   }
-  return { items: general, collectItems: collect };
+  return { items: infoItems, collectItems: collect };
 }
 
 /**
@@ -322,7 +328,7 @@ function listWasokSheets() {
       }
     }
     var sorted = sortItemsByLastUpdatedDesc_(passed);
-    var parts = partitionCollect_(sorted);
+    var parts = partitionByTitleMarks_(sorted);
     parts.items = sortItemsByLastUpdatedDesc_(parts.items);
     parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
     var completedItems = listCompletedFolderSheets_();
