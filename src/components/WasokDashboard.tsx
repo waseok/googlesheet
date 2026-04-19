@@ -10,6 +10,46 @@ import { SortDropdown } from "@/components/SortDropdown";
 import { CompletedFolderList } from "@/components/CompletedFolderList";
 import { SheetCard, type SheetCardSegment } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+/**
+ * GAS `DEFAULT_LIST_YEAR` / 스크립트 속성 LIST_YEAR 기본과 맞춰 안내합니다.
+ * 연도를 바꾸면 GAS와 함께 이 값도 수정하세요.
+ */
+const HUB_LIST_YEAR = 2026;
+
+/** 목록 등록 조건을 단어 단위 칩으로 표시 */
+function RegChips({
+  chips,
+  variant = "card",
+}: {
+  chips: string[];
+  variant?: "card" | "header";
+}) {
+  return (
+    <span
+      className={cn(
+        "flex flex-wrap items-center gap-1",
+        variant === "header" && "text-primary-foreground/95"
+      )}
+      role="note"
+    >
+      {chips.map((label) => (
+        <span
+          key={label}
+          className={cn(
+            "rounded border px-1.5 py-0.5 text-[10px] font-medium tracking-tight sm:text-[11px]",
+            variant === "header"
+              ? "border-white/25 bg-white/12 text-primary-foreground"
+              : "border-border/60 bg-background/80 text-foreground/90 dark:bg-background/40"
+          )}
+        >
+          {label}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 function primaryTime(it: SheetItem): string {
   return it.createdTime || it.lastUpdated;
@@ -334,10 +374,24 @@ export function WasokDashboard() {
               <p className="text-primary-foreground/85 text-sm font-medium tracking-wide">
                 업무용 시트 관리
               </p>
-              <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-                와석초등학교{" "}
-                <span className="text-primary-foreground/90 font-semibold">
-                  시트 허브
+              <h1 className="flex flex-col gap-1.5 text-xl font-bold tracking-tight sm:text-2xl">
+                <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span>
+                    와석초등학교{" "}
+                    <span className="text-primary-foreground/90 font-semibold">
+                      시트 허브
+                    </span>
+                  </span>
+                  <RegChips
+                    variant="header"
+                    chips={[
+                      "[와석초]",
+                      "구글시트",
+                      `${HUB_LIST_YEAR}년생성`,
+                      "조직공유",
+                      "Drive검색",
+                    ]}
+                  />
                 </span>
               </h1>
             </div>
@@ -378,12 +432,18 @@ export function WasokDashboard() {
                 <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
                   <h2
                     id="sec-info"
-                    className="text-primary border-primary/30 flex items-center gap-2 border-l-4 pl-3 text-lg font-semibold tracking-tight"
+                    className="text-primary border-primary/30 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 pl-3 text-lg font-semibold tracking-tight"
                   >
-                    정보 시트
-                    <span className="text-muted-foreground text-xs font-normal">
-                      (제목에 &quot;정보&quot; 포함, &quot;취합&quot; 없음)
-                    </span>
+                    <span>정보 시트</span>
+                    <RegChips
+                      chips={[
+                        "[와석초]",
+                        "정보",
+                        "취합없음",
+                        `${HUB_LIST_YEAR}년`,
+                        "시트",
+                      ]}
+                    />
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">
                     {visibleMain.length}건
@@ -407,12 +467,12 @@ export function WasokDashboard() {
                 <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-emerald-50/60 px-5 py-3 dark:bg-emerald-950/25">
                   <h2
                     id="sec-collect"
-                    className="text-emerald-900 dark:text-emerald-100 flex items-center gap-2 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
+                    className="text-emerald-900 dark:text-emerald-100 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
                   >
-                    취합 시트
-                    <span className="text-muted-foreground text-xs font-normal">
-                      (제목에 &quot;취합&quot; 포함)
-                    </span>
+                    <span>취합 시트</span>
+                    <RegChips
+                      chips={["[와석초]", "취합", `${HUB_LIST_YEAR}년`, "시트"]}
+                    />
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">
                     {visibleCollect.length}건
@@ -436,13 +496,18 @@ export function WasokDashboard() {
                 <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-amber-50/70 px-5 py-3 dark:bg-amber-950/20">
                   <h2
                     id="sec-completed"
-                    className="text-amber-950 dark:text-amber-100 flex flex-col gap-0.5 border-l-4 border-amber-700 pl-3 text-lg font-semibold tracking-tight sm:flex-row sm:items-baseline sm:gap-2"
+                    className="text-amber-950 dark:text-amber-100 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 border-amber-700 pl-3 text-lg font-semibold tracking-tight"
                   >
-                    완료 폴더
-                    <span className="text-muted-foreground text-xs font-normal">
-                      제목을 누르면 시트가 열리고, 되돌리기로 원래 구역으로
-                      복귀합니다
-                    </span>
+                    <span>완료 폴더</span>
+                    <RegChips
+                      chips={[
+                        "[와석초]",
+                        `${HUB_LIST_YEAR}년`,
+                        "시트",
+                        "완료폴더",
+                        "직속",
+                      ]}
+                    />
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">
                     {visibleCompleted.length}건
