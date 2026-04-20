@@ -10,6 +10,7 @@ import { SortDropdown } from "@/components/SortDropdown";
 import { CompletedFolderList } from "@/components/CompletedFolderList";
 import { SheetCard, type SheetCardSegment } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 /**
@@ -103,6 +104,20 @@ function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   }
 }
 
+/**
+ * 구글 시트 URL 또는 raw fileId 입력에서 fileId를 추출합니다.
+ * 허용 예:
+ * - https://docs.google.com/spreadsheets/d/<fileId>/edit...
+ * - <fileId>
+ */
+function extractFileId(raw: string): string {
+  const text = raw.trim();
+  if (!text) return "";
+  const m = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (m && m[1]) return m[1];
+  return /^[a-zA-Z0-9-_]{20,}$/.test(text) ? text : "";
+}
+
 type SheetGridProps = {
   segment: SheetCardSegment;
   list: SheetItem[];
@@ -155,6 +170,8 @@ export function WasokDashboard() {
   const [sortKey, setSortKey] = React.useState<SortKey>("created_desc");
   const [completingId, setCompletingId] = React.useState<string | null>(null);
   const [restoringId, setRestoringId] = React.useState<string | null>(null);
+  const [registerInput, setRegisterInput] = React.useState("");
+  const [registering, setRegistering] = React.useState(false);
 
   const itemsRef = React.useRef(items);
   const collectRef = React.useRef(collectItems);
@@ -357,6 +374,46 @@ export function WasokDashboard() {
     [items, collectItems, completedItems, sortKey]
   );
 
+  const handleRegister = React.useCallback(async () => {
+    const fileId = extractFileId(registerInput);
+    if (!fileId) {
+      toast.error("올바른 시트 URL 또는 fileId를 입력해주세요.");
+      return;
+    }
+
+    setRegistering(true);
+    try {
+      const res = await fetch("/api/sheets/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        alreadyRegistered?: boolean;
+        error?: string;
+      };
+
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      if (data.alreadyRegistered) {
+        toast.success("이미 등록된 시트입니다.");
+      } else {
+        toast.success("시트를 등록했습니다. 목록을 새로 불러옵니다.");
+      }
+
+      setRegisterInput("");
+      await loadSheets({ force: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error("시트 등록에 실패했습니다.", { description: msg });
+    } finally {
+      setRegistering(false);
+    }
+  }, [loadSheets, registerInput]);
+
   return (
     <div className="min-h-screen bg-slate-100/90 dark:bg-slate-950">
       <header className="border-border/40 text-primary-foreground border-b bg-[#183963] shadow-md">
@@ -389,7 +446,7 @@ export function WasokDashboard() {
                       "구글시트",
                       `${HUB_LIST_YEAR}년생성`,
                       "조직공유",
-                      "Drive검색",
+                      "검색+수동등록",
                     ]}
                   />
                 </span>
@@ -410,7 +467,27 @@ export function WasokDashboard() {
 
       <main className="container mx-auto max-w-6xl px-4 py-8">
         <div className="border-border/60 bg-background/95 mb-8 flex flex-col gap-4 rounded-xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <SearchBar value={query} onChange={setQuery} />
+          <div className="flex min-w-0 flex-1 flex-col gap-3">
+            <SearchBar value={query} onChange={setQuery} />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                value={registerInput}
+                onChange={(e) => setRegisterInput(e.target.value)}
+                placeholder="시트 URL 또는 fileId를 입력해 수동 등록"
+                aria-label="시트 URL 또는 fileId 수동 등록"
+                disabled={registering}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={registering}
+                onClick={() => void handleRegister()}
+                className="sm:w-auto"
+              >
+                {registering ? "등록 중…" : "시트 등록"}
+              </Button>
+            </div>
+          </div>
           <SortDropdown value={sortKey} onValueChange={setSortKey} />
         </div>
 

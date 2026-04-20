@@ -47,6 +47,15 @@ export interface GasDescriptionResponse {
   error?: string;
 }
 
+/** GAS fileId 수동 등록 응답 */
+export interface GasRegisterResponse {
+  ok: boolean;
+  id?: string;
+  item?: SheetItem;
+  alreadyRegistered?: boolean;
+  error?: string;
+}
+
 /** 정렬 옵션: UI에서 사용 */
 export type SortKey =
   | "lastUpdated_desc"

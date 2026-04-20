@@ -27,6 +27,7 @@ var REQUIRED_TITLE_MARK = '[와석초]';
 var COLLECT_MARK = '취합';
 var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
 
 function getCompletedFolderId_() {
   var id = PropertiesService.getScriptProperties().getProperty('COMPLETED_FOLDER_ID');
@@ -197,6 +198,168 @@ function sortItemsByLastUpdatedDesc_(items) {
   });
 }
 
+/**
+ * ScriptProperties 에 저장된 등록 fileId 목록(JSON 배열)을 읽습니다.
+ * @returns {Array<string>}
+ */
+function getRegisteredFileIds_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(REGISTERED_FILE_IDS_PROP);
+  if (!raw) {
+    return [];
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var v = parsed[i];
+      if (typeof v !== 'string') {
+        continue;
+      }
+      var id = v.trim();
+      if (!id || seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * 등록 fileId 목록을 ScriptProperties(JSON 배열)으로 저장합니다.
+ * @param {Array<string>} ids
+ */
+function setRegisteredFileIds_(ids) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var v = ids[i];
+    if (typeof v !== 'string') {
+      continue;
+    }
+    var id = v.trim();
+    if (!id || seen[id]) {
+      continue;
+    }
+    seen[id] = true;
+    out.push(id);
+  }
+  PropertiesService.getScriptProperties().setProperty(
+    REGISTERED_FILE_IDS_PROP,
+    JSON.stringify(out)
+  );
+}
+
+/**
+ * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
+ * - 권한 확인: DriveApp.getFileById 성공 필요
+ * - 허브 규칙([와석초], 생성연도, 시트 MIME) 통과 필요
+ * @param {string} fileId
+ * @returns {{ ok: boolean, id?: string, item?: Object, alreadyRegistered?: boolean, error?: string }}
+ */
+function registerSheetById_(fileId) {
+  var id = fileId ? String(fileId).trim() : '';
+  if (!id) {
+    return { ok: false, error: 'fileId 가 필요합니다.' };
+  }
+  try {
+    var file = DriveApp.getFileById(id);
+    var gate = assertFileAllowedForHub_(file);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
+    }
+    var ids = getRegisteredFileIds_();
+    var already = false;
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] === id) {
+        already = true;
+        break;
+      }
+    }
+    if (!already) {
+      ids.push(id);
+      setRegisteredFileIds_(ids);
+    }
+    return {
+      ok: true,
+      id: id,
+      item: fileToItem_(file),
+      alreadyRegistered: already,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: '해당 시트에 접근할 수 없습니다. 공유 권한 또는 fileId 를 확인하세요.',
+    };
+  }
+}
+
+/**
+ * 작성자 표시: Drive User.getName() 우선, 없으면 이메일 @ 앞부분
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {{ author: string, authorEmail: string }}
+ */
+function resolveAuthorFields_(file) {
+  var authorEmail = '';
+  var authorName = '';
+  try {
+    var owner = file.getOwner();
+    try {
+      authorEmail = owner.getEmail() || '';
+    } catch (e0) {}
+    try {
+      authorName = owner.getName() || '';
+    } catch (e1) {}
+  } catch (err) {
+    return { author: '', authorEmail: '' };
+  }
+  var author = '';
+  if (authorName && String(authorName).trim().length > 0) {
+    author = String(authorName).trim();
+  } else if (authorEmail && authorEmail.indexOf('@') !== -1) {
+    author = authorEmail.split('@')[0];
+  } else if (authorEmail) {
+    author = authorEmail;
+  }
+  return { author: author, authorEmail: authorEmail };
+}
+
+/**
+ * @param {GoogleAppsScript.Drive.File} file
+ * @returns {Object}
+ */
+function fileToItem_(file) {
+  var auth = resolveAuthorFields_(file);
+  var desc = '';
+  try {
+    desc = file.getDescription() || '';
+  } catch (e2) {
+    desc = '';
+  }
+  return {
+    id: file.getId(),
+    name: file.getName(),
+    url: file.getUrl(),
+    author: auth.author,
+    authorEmail: auth.authorEmail,
+    description: desc,
+    lastUpdated: file.getLastUpdated().toISOString(),
+    createdTime: file.getDateCreated().toISOString(),
+  };
+}
+
+/**
+ * 제목 키워드로 구역 분리 — 취합 우선, 다음 정보
+ * @param {Array<Object>} rows name 필드 기준
+ * @returns {{ items: Array<Object>, collectItems: Array<Object> }}
+ */
 function partitionByTitleMarks_(rows) {
   var infoItems = [], collect = [];
   for (var i = 0; i < rows.length; i++) {
@@ -244,12 +407,30 @@ function listWasokSheets() {
     // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
     var allFiles = searchDomainFiles_(query);
-
-    var passed = [];
+    var byId = {};
     for (var i = 0; i < allFiles.length; i++) {
       var f = allFiles[i];
       if (driveObjPassesListRules_(f) && !driveObjIsInFolder_(f, doneId)) {
-        passed.push(driveObjToItem_(f));
+        byId[f.id] = driveObjToItem_(f);
+      }
+    }
+    var registeredIds = getRegisteredFileIds_();
+    for (var i = 0; i < registeredIds.length; i++) {
+      var rid = registeredIds[i];
+      if (byId[rid]) {
+        continue;
+      }
+      try {
+        var rf = DriveApp.getFileById(rid);
+        if (filePassesListRules_(rf) && !fileIsInFolder_(rf, doneId)) {
+          byId[rid] = fileToItem_(rf);
+        }
+      } catch (ignore) {}
+    }
+    var passed = [];
+    for (var id in byId) {
+      if (Object.prototype.hasOwnProperty.call(byId, id)) {
+        passed.push(byId[id]);
       }
     }
 
@@ -369,6 +550,11 @@ function doPost(e) {
 
   if (action === 'savedescription' || action === 'save_description') {
     return jsonOutput_(saveFileDescription_(body.fileId || '', body.description != null ? body.description : ''));
+  }
+
+  if (action === 'register' || action === 'registerfile' || action === 'register_file') {
+    var regId = body.fileId || '';
+    return jsonOutput_(registerSheetById_(regId));
   }
 
   if (action === 'restore') {
