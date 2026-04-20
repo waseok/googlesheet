@@ -164,6 +164,79 @@ function driveObjToItem_(f) {
 }
 
 /**
+ * Drive API v3 단건 조회 (공유 드라이브 포함)
+ * @param {string} fileId
+ * @param {string=} fields
+ * @returns {Object}
+ */
+function getDriveFileById_(fileId, fields) {
+  return Drive.Files.get(fileId, {
+    supportsAllDrives: true,
+    fields: fields || 'id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents',
+  });
+}
+
+/**
+ * 허브 규칙 검증(Drive API v3 file 객체 기준)
+ * @param {Object} f
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function assertDriveObjAllowedForHub_(f) {
+  if (!f || f.mimeType !== SPREADSHEET_MIME) {
+    return { ok: false, error: '스프레드시트가 아닙니다.' };
+  }
+  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
+    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
+  }
+  var ct = f.createdTime ? new Date(f.createdTime) : null;
+  if (!ct || isNaN(ct.getTime()) || ct.getFullYear() !== getListYear_()) {
+    return { ok: false, error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.' };
+  }
+  return { ok: true };
+}
+
+/**
+ * 완료 폴더에 있는 [와석초] 스프레드시트만 복원 허용
+ * @param {Object} f
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function assertDriveObjRestoreAllowed_(f) {
+  var completedId = getCompletedFolderId_();
+  if (!completedId) {
+    return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
+  }
+  if (!driveObjIsInFolder_(f, completedId)) {
+    return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
+  }
+  if (!f || f.mimeType !== SPREADSHEET_MIME) {
+    return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
+  }
+  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
+    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
+  }
+  return { ok: true };
+}
+
+/**
+ * 파일 부모를 교체하여 대상 폴더로 이동(공유 드라이브 포함)
+ * @param {Object} f Drive API v3 file 객체(부모 포함)
+ * @param {string} targetFolderId
+ */
+function moveDriveFileToFolder_(f, targetFolderId) {
+  var parents = f.parents || [];
+  var removeParents = parents.join(',');
+  var opts = {
+    supportsAllDrives: true,
+    addParents: targetFolderId,
+    fields: 'id, parents',
+  };
+  if (removeParents) {
+    opts.removeParents = removeParents;
+  }
+  return Drive.Files.update({}, f.id, null, opts);
+}
+
+/**
  * Drive API v3 로 도메인 전체 파일 검색 (페이지네이션 포함)
  * ※ GAS 편집기에서 서비스(+) → Drive API 를 추가해야 합니다.
  * @param {string} query Drive API v3 검색 쿼리
@@ -270,8 +343,8 @@ function registerSheetById_(fileId) {
     return { ok: false, error: 'fileId 가 필요합니다.' };
   }
   try {
-    var file = DriveApp.getFileById(id);
-    var gate = assertFileAllowedForHub_(file);
+    var file = getDriveFileById_(id);
+    var gate = assertDriveObjAllowedForHub_(file);
     if (!gate.ok) {
       return { ok: false, error: gate.error };
     }
@@ -290,7 +363,7 @@ function registerSheetById_(fileId) {
     return {
       ok: true,
       id: id,
-      item: fileToItem_(file),
+      item: driveObjToItem_(file),
       alreadyRegistered: already,
     };
   } catch (e) {
@@ -421,9 +494,9 @@ function listWasokSheets() {
         continue;
       }
       try {
-        var rf = DriveApp.getFileById(rid);
-        if (filePassesListRules_(rf) && !fileIsInFolder_(rf, doneId)) {
-          byId[rid] = fileToItem_(rf);
+        var rf = getDriveFileById_(rid);
+        if (driveObjPassesListRules_(rf) && !driveObjIsInFolder_(rf, doneId)) {
+          byId[rid] = driveObjToItem_(rf);
         }
       } catch (ignore) {}
     }
@@ -480,13 +553,10 @@ function moveFileToCompleted(fileId) {
     };
   }
   try {
-    var file = DriveApp.getFileById(fileId);
-    var gate = assertFileAllowedForHub_(file);
+    var file = getDriveFileById_(fileId, 'id, name, mimeType, createdTime, parents');
+    var gate = assertDriveObjAllowedForHub_(file);
     if (!gate.ok) return { ok: false, error: gate.error };
-    var targetFolder = DriveApp.getFolderById(folderId);
-    var parents = file.getParents();
-    while (parents.hasNext()) parents.next().removeFile(file);
-    targetFolder.addFile(file);
+    moveDriveFileToFolder_(file, folderId);
     return { ok: true, message: '완료 폴더로 이동했습니다.', id: fileId };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
@@ -496,13 +566,11 @@ function moveFileToCompleted(fileId) {
 function restoreFileFromCompleted(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   try {
-    var file = DriveApp.getFileById(fileId);
-    var gate = assertRestoreAllowed_(file);
+    var file = getDriveFileById_(fileId, 'id, name, mimeType, createdTime, parents');
+    var gate = assertDriveObjRestoreAllowed_(file);
     if (!gate.ok) return { ok: false, error: gate.error };
     var dest = getRestoreTargetFolder_();
-    var parents = file.getParents();
-    while (parents.hasNext()) parents.next().removeFile(file);
-    dest.addFile(file);
+    moveDriveFileToFolder_(file, dest.getId());
     return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
