@@ -3,94 +3,50 @@
  * 와석초 구글 시트 통합 관리 대시보드 (Wasok Sheet Hub) - Google Apps Script
  * ============================================================================
  * 목록 규칙:
- *   - 제목에 대괄호 포함 문자열 "[와석초]" 가 정확히 들어간 스프레드시트만 (와석초 단독 제외)
- *   - 생성일(getDateCreated)이 LIST_YEAR 연도인 것만
+ *   - 제목에 "[와석초]" 가 정확히 들어간 스프레드시트만
+ *   - 생성일(createdTime)이 LIST_YEAR 연도인 것만
  *   - 제목에 "취합"이 있으면 collectItems 로
- *   - 그 외 중 제목에 "정보"가 있으면 items(정보 시트 구역)로. 둘 다 없으면 허브 목록에 표시하지 않음
- *   - author: 소유자 표시 이름(getName), 없으면 이메일 @ 앞부분 / authorEmail / description: Drive 파일 설명
- *   - 설명 저장: POST JSON … description 최대 300자 → Drive setDescription (완료 폴더 내 시트 포함)
+ *   - 그 외 중 제목에 "정보"가 있으면 items(정보 시트 구역)로. 둘 다 없으면 표시하지 않음
  *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 시트 목록 (하단 구역 표시용)
- *   - 전체 Drive 검색 목록에서는 완료 폴더 안에 있는 파일은 제외(중복 방지)
+ *
+ * [중요] Drive 고급 서비스 활성화 필요:
+ *   GAS 편집기 좌측 → 서비스(+) → "Drive API" 추가
+ *   → corpora: 'domain' 으로 도메인 전체 조직 공유 파일 검색
+ *   → 스크립트 소유자가 직접 열지 않아도 조직 공유된 파일이 자동 반영됨
  *
  * 스크립트 속성:
- *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN (기존과 동일)
- *   - LIST_YEAR (선택, 기본 2026) — 생성 연도 필터
- *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 실행 계정 My Drive 루트
- *
- * Drive 검색은 title contains '와석초' 로 후보를 넓게 가져온 뒤, 스크립트에서 위 규칙으로 엄격 필터합니다.
- * (쿼리만 title contains '[와석초]' 로 두면 Drive 쪽에서 대괄호 해석이 달라질 수 있어 후보+필터 방식을 씁니다.)
+ *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN
+ *   - LIST_YEAR (선택, 기본 2026)
+ *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 My Drive 루트
  * ============================================================================
  */
 
 var DEFAULT_COMPLETED_FOLDER_ID = '';
-
-/** 목록·완료 검증에 쓰는 생성 연도 (스크립트 속성 LIST_YEAR 가 있으면 우선) */
 var DEFAULT_LIST_YEAR = 2026;
-
-/** 제목에 반드시 포함되어야 하는 문자열(대괄호 포함) */
 var REQUIRED_TITLE_MARK = '[와석초]';
-
-/** 제목에 포함되면 "취합" 구역으로 분류(정보와 동시에 있으면 취합 우선) */
 var COLLECT_MARK = '취합';
-
-/** 제목에 포함되면 "정보 시트" 구역(items)으로 분류 — 취합이 없을 때만 */
 var INFO_MARK = '정보';
-
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 
 function getCompletedFolderId_() {
   var id = PropertiesService.getScriptProperties().getProperty('COMPLETED_FOLDER_ID');
-  if (id && id.length > 0) {
-    return id;
-  }
-  return DEFAULT_COMPLETED_FOLDER_ID || '';
+  return (id && id.length > 0) ? id : (DEFAULT_COMPLETED_FOLDER_ID || '');
 }
 
-/**
- * 되돌리기 대상 폴더 (RESTORE_FOLDER_ID 없으면 루트)
- * @returns {GoogleAppsScript.Drive.Folder}
- */
 function getRestoreTargetFolder_() {
   var id = PropertiesService.getScriptProperties().getProperty('RESTORE_FOLDER_ID');
-  if (id && id.length > 0) {
-    return DriveApp.getFolderById(id);
-  }
+  if (id && id.length > 0) return DriveApp.getFolderById(id);
   return DriveApp.getRootFolder();
-}
-
-/**
- * 완료 폴더에 있는 [와석초] 스프레드시트만 되돌리기 허용(생성연도 무관)
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {{ ok: boolean, error?: string }}
- */
-function assertRestoreAllowed_(file) {
-  var completedId = getCompletedFolderId_();
-  if (!completedId) {
-    return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
-  }
-  if (!fileIsInFolder_(file, completedId)) {
-    return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
-  }
-  if (file.getMimeType() !== SPREADSHEET_MIME) {
-    return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
-  }
-  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) {
-    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
-  }
-  return { ok: true };
 }
 
 function getMutationToken_() {
   var t = PropertiesService.getScriptProperties().getProperty('MUTATION_TOKEN');
-  return t && t.length > 0 ? t : '';
+  return (t && t.length > 0) ? t : '';
 }
 
-/** @returns {number} */
 function getListYear_() {
   var y = PropertiesService.getScriptProperties().getProperty('LIST_YEAR');
-  if (y && /^\d{4}$/.test(y)) {
-    return parseInt(y, 10);
-  }
+  if (y && /^\d{4}$/.test(y)) return parseInt(y, 10);
   return DEFAULT_LIST_YEAR;
 }
 
@@ -108,91 +64,41 @@ function assertMutationAllowed_(tokenFromRequest) {
   return { ok: true };
 }
 
-/**
- * Drive 후보 검색 쿼리 (스크립트에서 [와석초]·연도·MIME 재검증)
- * @returns {string}
- */
-function buildLooseSearchQuery_() {
-  return (
-    "title contains '와석초' and mimeType = '" +
-    SPREADSHEET_MIME +
-    "' and trashed = false"
-  );
+// ── DriveApp File 객체용 헬퍼 (완료·되돌리기·설명 저장 mutation 에서 사용) ──
+
+function fileIsInFolder_(file, folderId) {
+  if (!folderId) return false;
+  try {
+    var it = file.getParents();
+    while (it.hasNext()) {
+      if (it.next().getId() === folderId) return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
-/**
- * 허브 규칙: 스프레드시트, 제목에 "[와석초]" 부분 문자열, 생성 연도
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {boolean}
- */
-function filePassesListRules_(file) {
-  if (file.getMimeType() !== SPREADSHEET_MIME) {
-    return false;
-  }
-  var name = file.getName();
-  if (name.indexOf(REQUIRED_TITLE_MARK) === -1) {
-    return false;
-  }
-  var year = file.getDateCreated().getFullYear();
-  return year === getListYear_();
+function assertRestoreAllowed_(file) {
+  var completedId = getCompletedFolderId_();
+  if (!completedId) return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
+  if (!fileIsInFolder_(file, completedId)) return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
+  if (file.getMimeType() !== SPREADSHEET_MIME) return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
+  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
+  return { ok: true };
 }
 
-/**
- * 완료 이동 전 동일 규칙 검증
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {{ ok: boolean, error?: string }}
- */
 function assertFileAllowedForHub_(file) {
-  if (file.getMimeType() !== SPREADSHEET_MIME) {
-    return { ok: false, error: '스프레드시트가 아닙니다.' };
-  }
-  var name = file.getName();
-  if (name.indexOf(REQUIRED_TITLE_MARK) === -1) {
-    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
-  }
+  if (file.getMimeType() !== SPREADSHEET_MIME) return { ok: false, error: '스프레드시트가 아닙니다.' };
+  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
   var y = file.getDateCreated().getFullYear();
   if (y !== getListYear_()) {
-    return {
-      ok: false,
-      error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.',
-    };
+    return { ok: false, error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.' };
   }
   return { ok: true };
 }
 
-/**
- * 파일의 상위 폴더 중 id 가 folderId 인 것이 있는지
- * @param {GoogleAppsScript.Drive.File} file
- * @param {string} folderId
- * @returns {boolean}
- */
-function fileIsInFolder_(file, folderId) {
-  if (!folderId) {
-    return false;
-  }
-  try {
-    var it = file.getParents();
-    while (it.hasNext()) {
-      if (it.next().getId() === folderId) {
-        return true;
-      }
-    }
-  } catch (e) {
-    return false;
-  }
-  return false;
-}
-
-/**
- * 허브 규칙 통과 시트 또는 완료 폴더 안의 [와석초] 스프레드시트만 설명 저장 허용
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {{ ok: boolean, error?: string }}
- */
 function assertFileAllowedForDescription_(file) {
   var hub = assertFileAllowedForHub_(file);
-  if (hub.ok) {
-    return hub;
-  }
+  if (hub.ok) return hub;
   var folderId = getCompletedFolderId_();
   if (
     folderId &&
@@ -205,6 +111,84 @@ function assertFileAllowedForDescription_(file) {
   return hub;
 }
 
+// ── Drive API v3 객체용 헬퍼 (목록 검색에서 사용) ───────────────────────────
+
+/**
+ * Drive API v3 file 객체가 허브 목록 규칙을 통과하는지 확인
+ */
+function driveObjPassesListRules_(f) {
+  if (f.mimeType !== SPREADSHEET_MIME) return false;
+  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) return false;
+  if (!f.createdTime) return false;
+  return new Date(f.createdTime).getFullYear() === getListYear_();
+}
+
+/**
+ * Drive API v3 file 객체의 parents 배열에 folderId 가 있는지 확인
+ */
+function driveObjIsInFolder_(f, folderId) {
+  if (!folderId) return false;
+  var parents = f.parents || [];
+  for (var i = 0; i < parents.length; i++) {
+    if (parents[i] === folderId) return true;
+  }
+  return false;
+}
+
+/**
+ * Drive API v3 file 객체 → SheetItem
+ */
+function driveObjToItem_(f) {
+  var owner = (f.owners && f.owners[0]) || {};
+  var authorEmail = owner.emailAddress || '';
+  var authorName = owner.displayName || '';
+  var author = '';
+  if (authorName && authorName.trim().length > 0) {
+    author = authorName.trim();
+  } else if (authorEmail && authorEmail.indexOf('@') !== -1) {
+    author = authorEmail.split('@')[0];
+  } else {
+    author = authorEmail;
+  }
+  return {
+    id: f.id,
+    name: f.name,
+    url: f.webViewLink,
+    author: author,
+    authorEmail: authorEmail,
+    description: f.description || '',
+    lastUpdated: f.modifiedTime,
+    createdTime: f.createdTime,
+  };
+}
+
+/**
+ * Drive API v3 로 도메인 전체 파일 검색 (페이지네이션 포함)
+ * ※ GAS 편집기에서 서비스(+) → Drive API 를 추가해야 합니다.
+ * @param {string} query Drive API v3 검색 쿼리
+ * @returns {Array<Object>} Drive API v3 file 객체 배열
+ */
+function searchDomainFiles_(query) {
+  var allFiles = [];
+  var pageToken = null;
+  do {
+    var params = {
+      q: query,
+      corpora: 'domain',
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
+      pageSize: 1000,
+    };
+    if (pageToken) params.pageToken = pageToken;
+    var resp = Drive.Files.list(params);
+    var files = resp.files || [];
+    allFiles = allFiles.concat(files);
+    pageToken = resp.nextPageToken || null;
+  } while (pageToken);
+  return allFiles;
+}
+
 function sortItemsByLastUpdatedDesc_(items) {
   return items.slice().sort(function (a, b) {
     if (a.lastUpdated < b.lastUpdated) return 1;
@@ -213,98 +197,36 @@ function sortItemsByLastUpdatedDesc_(items) {
   });
 }
 
-/**
- * 작성자 표시: Drive User.getName() 우선, 없으면 이메일 @ 앞부분
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {{ author: string, authorEmail: string }}
- */
-function resolveAuthorFields_(file) {
-  var authorEmail = '';
-  var authorName = '';
-  try {
-    var owner = file.getOwner();
-    try {
-      authorEmail = owner.getEmail() || '';
-    } catch (e0) {}
-    try {
-      authorName = owner.getName() || '';
-    } catch (e1) {}
-  } catch (err) {
-    return { author: '', authorEmail: '' };
-  }
-  var author = '';
-  if (authorName && String(authorName).trim().length > 0) {
-    author = String(authorName).trim();
-  } else if (authorEmail && authorEmail.indexOf('@') !== -1) {
-    author = authorEmail.split('@')[0];
-  } else if (authorEmail) {
-    author = authorEmail;
-  }
-  return { author: author, authorEmail: authorEmail };
-}
-
-/**
- * @param {GoogleAppsScript.Drive.File} file
- * @returns {Object}
- */
-function fileToItem_(file) {
-  var auth = resolveAuthorFields_(file);
-  var desc = '';
-  try {
-    desc = file.getDescription() || '';
-  } catch (e2) {
-    desc = '';
-  }
-  return {
-    id: file.getId(),
-    name: file.getName(),
-    url: file.getUrl(),
-    author: auth.author,
-    authorEmail: auth.authorEmail,
-    description: desc,
-    lastUpdated: file.getLastUpdated().toISOString(),
-    createdTime: file.getDateCreated().toISOString(),
-  };
-}
-
-/**
- * 제목 키워드로 구역 분리 — 취합 우선, 다음 정보
- * @param {Array<Object>} rows name 필드 기준
- * @returns {{ items: Array<Object>, collectItems: Array<Object> }}
- */
 function partitionByTitleMarks_(rows) {
-  var infoItems = [];
-  var collect = [];
+  var infoItems = [], collect = [];
   for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    var n = row.name;
-    if (n.indexOf(COLLECT_MARK) !== -1) {
-      collect.push(row);
-    } else if (n.indexOf(INFO_MARK) !== -1) {
-      infoItems.push(row);
-    }
+    var n = rows[i].name;
+    if (n.indexOf(COLLECT_MARK) !== -1) collect.push(rows[i]);
+    else if (n.indexOf(INFO_MARK) !== -1) infoItems.push(rows[i]);
   }
   return { items: infoItems, collectItems: collect };
 }
 
 /**
  * 완료 폴더 직속 파일 중 허브 규칙에 맞는 스프레드시트
- * @returns {Array<Object>}
+ * Drive API v3 로 검색하므로 공유드라이브 완료 폴더도 지원
  */
 function listCompletedFolderSheets_() {
   var folderId = getCompletedFolderId_();
-  if (!folderId) {
-    return [];
-  }
+  if (!folderId) return [];
   try {
-    var folder = DriveApp.getFolderById(folderId);
-    var it = folder.getFiles();
+    var params = {
+      q: "'" + folderId + "' in parents and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false",
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
+      pageSize: 1000,
+    };
+    var resp = Drive.Files.list(params);
+    var files = resp.files || [];
     var rows = [];
-    while (it.hasNext()) {
-      var f = it.next();
-      if (filePassesListRules_(f)) {
-        rows.push(fileToItem_(f));
-      }
+    for (var i = 0; i < files.length; i++) {
+      if (driveObjPassesListRules_(files[i])) rows.push(driveObjToItem_(files[i]));
     }
     return sortItemsByLastUpdatedDesc_(rows);
   } catch (e) {
@@ -313,31 +235,31 @@ function listCompletedFolderSheets_() {
 }
 
 /**
- * @returns {{ ok: boolean, items: Array<Object>, collectItems: Array<Object>, completedItems: Array<Object>, error?: string }}
+ * 메인 목록 — Drive API v3 도메인 검색
+ * corpora: 'domain' 으로 소유자가 열지 않아도 조직 공유 파일이 모두 검색됨
  */
 function listWasokSheets() {
   try {
     var doneId = getCompletedFolderId_();
-    var query = buildLooseSearchQuery_();
-    var iterator = DriveApp.searchFiles(query);
+    // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
+    var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
+    var allFiles = searchDomainFiles_(query);
+
     var passed = [];
-    while (iterator.hasNext()) {
-      var file = iterator.next();
-      if (filePassesListRules_(file) && !fileIsInFolder_(file, doneId)) {
-        passed.push(fileToItem_(file));
+    for (var i = 0; i < allFiles.length; i++) {
+      var f = allFiles[i];
+      if (driveObjPassesListRules_(f) && !driveObjIsInFolder_(f, doneId)) {
+        passed.push(driveObjToItem_(f));
       }
     }
+
     var sorted = sortItemsByLastUpdatedDesc_(passed);
     var parts = partitionByTitleMarks_(sorted);
     parts.items = sortItemsByLastUpdatedDesc_(parts.items);
     parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
     var completedItems = listCompletedFolderSheets_();
-    return {
-      ok: true,
-      items: parts.items,
-      collectItems: parts.collectItems,
-      completedItems: completedItems,
-    };
+
+    return { ok: true, items: parts.items, collectItems: parts.collectItems, completedItems: completedItems };
   } catch (e) {
     return {
       ok: false,
@@ -349,27 +271,17 @@ function listWasokSheets() {
   }
 }
 
-/**
- * 웹에서 입력한 설명을 Drive 파일 설명에 저장합니다(목록 규칙 통과 시트만).
- * @param {string} fileId
- * @param {string} description
- * @returns {{ ok: boolean, id?: string, description?: string, error?: string }}
- */
+// ── Mutation 함수 (DriveApp 유지 — getFileById 는 도메인 공유 파일도 접근 가능) ──
+
 function saveFileDescription_(fileId, description) {
-  if (!fileId) {
-    return { ok: false, error: 'fileId 가 필요합니다.' };
-  }
+  if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   var maxLen = 300;
   var text = description != null ? String(description) : '';
-  if (text.length > maxLen) {
-    text = text.substring(0, maxLen);
-  }
+  if (text.length > maxLen) text = text.substring(0, maxLen);
   try {
     var file = DriveApp.getFileById(fileId);
     var gate = assertFileAllowedForDescription_(file);
-    if (!gate.ok) {
-      return { ok: false, error: gate.error };
-    }
+    if (!gate.ok) return { ok: false, error: gate.error };
     file.setDescription(text);
     return { ok: true, id: fileId, description: text };
   } catch (e) {
@@ -378,64 +290,45 @@ function saveFileDescription_(fileId, description) {
 }
 
 function moveFileToCompleted(fileId) {
-  if (!fileId) {
-    return { ok: false, error: 'fileId 가 필요합니다.' };
-  }
+  if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   var folderId = getCompletedFolderId_();
   if (!folderId) {
     return {
       ok: false,
-      error:
-        '완료 폴더 ID가 없습니다. 스크립트 속성 COMPLETED_FOLDER_ID 또는 DEFAULT_COMPLETED_FOLDER_ID 를 설정하세요.',
+      error: '완료 폴더 ID가 없습니다. 스크립트 속성 COMPLETED_FOLDER_ID 또는 DEFAULT_COMPLETED_FOLDER_ID 를 설정하세요.',
     };
   }
-
   try {
     var file = DriveApp.getFileById(fileId);
     var gate = assertFileAllowedForHub_(file);
-    if (!gate.ok) {
-      return { ok: false, error: gate.error };
-    }
-
+    if (!gate.ok) return { ok: false, error: gate.error };
     var targetFolder = DriveApp.getFolderById(folderId);
     var parents = file.getParents();
-    while (parents.hasNext()) {
-      parents.next().removeFile(file);
-    }
+    while (parents.hasNext()) parents.next().removeFile(file);
     targetFolder.addFile(file);
-
     return { ok: true, message: '완료 폴더로 이동했습니다.', id: fileId };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
 }
 
-/**
- * 완료 폴더에서 복원 폴더(또는 루트)로 이동
- * @param {string} fileId
- * @returns {{ ok: boolean, message?: string, id?: string, error?: string }}
- */
 function restoreFileFromCompleted(fileId) {
-  if (!fileId) {
-    return { ok: false, error: 'fileId 가 필요합니다.' };
-  }
+  if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   try {
     var file = DriveApp.getFileById(fileId);
     var gate = assertRestoreAllowed_(file);
-    if (!gate.ok) {
-      return { ok: false, error: gate.error };
-    }
+    if (!gate.ok) return { ok: false, error: gate.error };
     var dest = getRestoreTargetFolder_();
     var parents = file.getParents();
-    while (parents.hasNext()) {
-      parents.next().removeFile(file);
-    }
+    while (parents.hasNext()) parents.next().removeFile(file);
     dest.addFile(file);
     return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
 }
+
+// ── HTTP 핸들러 ─────────────────────────────────────────────────────────────
 
 function jsonOutput_(payload) {
   var out = ContentService.createTextOutput(JSON.stringify(payload));
@@ -449,20 +342,14 @@ function doGet(e) {
 
   if (action === 'complete' || action === 'move') {
     var gate = assertMutationAllowed_(params.token || '');
-    if (!gate.ok) {
-      return jsonOutput_(gate);
-    }
-    var fileId = params.fileId || '';
-    return jsonOutput_(moveFileToCompleted(fileId));
+    if (!gate.ok) return jsonOutput_(gate);
+    return jsonOutput_(moveFileToCompleted(params.fileId || ''));
   }
 
   if (action === 'restore') {
     var gateR = assertMutationAllowed_(params.token || '');
-    if (!gateR.ok) {
-      return jsonOutput_(gateR);
-    }
-    var rid = params.fileId || '';
-    return jsonOutput_(restoreFileFromCompleted(rid));
+    if (!gateR.ok) return jsonOutput_(gateR);
+    return jsonOutput_(restoreFileFromCompleted(params.fileId || ''));
   }
 
   return jsonOutput_(listWasokSheets());
@@ -471,30 +358,22 @@ function doGet(e) {
 function doPost(e) {
   var body = {};
   try {
-    if (e && e.postData && e.postData.contents) {
-      body = JSON.parse(e.postData.contents);
-    }
-  } catch (ignore) {
-    body = {};
-  }
+    if (e && e.postData && e.postData.contents) body = JSON.parse(e.postData.contents);
+  } catch (ignore) {}
+
   var token = body.token || (e.parameter && e.parameter.token) || '';
   var gate = assertMutationAllowed_(token);
-  if (!gate.ok) {
-    return jsonOutput_(gate);
-  }
+  if (!gate.ok) return jsonOutput_(gate);
 
   var action = String(body.action || 'complete').toLowerCase();
+
   if (action === 'savedescription' || action === 'save_description') {
-    var sid = body.fileId || '';
-    var sdesc = body.description != null ? body.description : '';
-    return jsonOutput_(saveFileDescription_(sid, sdesc));
+    return jsonOutput_(saveFileDescription_(body.fileId || '', body.description != null ? body.description : ''));
   }
 
   if (action === 'restore') {
-    var rid2 = body.fileId || '';
-    return jsonOutput_(restoreFileFromCompleted(rid2));
+    return jsonOutput_(restoreFileFromCompleted(body.fileId || ''));
   }
 
-  var fileId = body.fileId || (e.parameter && e.parameter.fileId) || '';
-  return jsonOutput_(moveFileToCompleted(fileId));
+  return jsonOutput_(moveFileToCompleted(body.fileId || (e.parameter && e.parameter.fileId) || ''));
 }
