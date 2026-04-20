@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/card";
 import {
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Info,
   Layers,
@@ -32,6 +34,10 @@ type SheetCardProps = {
   completing: boolean;
   onComplete: (item: SheetItem) => void;
   onDescriptionSaved: (id: string, description: string) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 };
 
 /** 짧은 표기 — 카드 한 줄 메타에 사용 */
@@ -76,6 +82,10 @@ export function SheetCard({
   completing,
   onComplete,
   onDescriptionSaved,
+  onMoveUp,
+  onMoveDown,
+  canMoveUp,
+  canMoveDown,
 }: SheetCardProps) {
   const [draft, setDraft] = React.useState(item.description || "");
   const [savingDesc, setSavingDesc] = React.useState(false);
@@ -250,6 +260,30 @@ export function SheetCard({
           className="h-7 border-transparent bg-red-600 px-2.5 text-xs text-white shadow-sm hover:bg-red-700 focus-visible:ring-red-500/40"
         >
           {completing ? "처리 중…" : "완료 처리"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!canMoveUp}
+          onClick={onMoveUp}
+          className="h-7 gap-1 px-2 text-xs"
+          title="링크를 위로 이동"
+        >
+          <ChevronUp className="size-3.5" />
+          위로
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!canMoveDown}
+          onClick={onMoveDown}
+          className="h-7 gap-1 px-2 text-xs"
+          title="링크를 아래로 이동"
+        >
+          <ChevronDown className="size-3.5" />
+          아래로
         </Button>
       </CardFooter>
     </Card>

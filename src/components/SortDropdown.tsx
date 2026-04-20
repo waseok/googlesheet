@@ -16,6 +16,7 @@ type SortDropdownProps = {
 };
 
 const LABELS: Record<SortKey, string> = {
+  manual: "직접 정렬: 위/아래 버튼",
   created_desc: "만든 날짜: 최신순",
   created_asc: "만든 날짜: 오래된순",
   lastUpdated_desc: "수정 날짜: 최신순",

@@ -19,6 +19,48 @@ import { cn } from "@/lib/utils";
  */
 const HUB_LIST_YEAR = 2026;
 const SORT_STORAGE_KEY = "wasok-sort-key";
+const MANUAL_ORDER_INFO_KEY = "wasok-manual-order-info";
+const MANUAL_ORDER_COLLECT_KEY = "wasok-manual-order-collect";
+const MANUAL_ORDER_COMPLETED_KEY = "wasok-manual-order-completed";
+
+function readIdOrderFromStorage(key: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+function reconcileOrder(order: string[], items: SheetItem[]): string[] {
+  const itemIdSet = new Set(items.map((x) => x.id));
+  const next: string[] = [];
+  for (const id of order) {
+    if (itemIdSet.has(id)) next.push(id);
+  }
+  for (const item of items) {
+    if (!next.includes(item.id)) next.push(item.id);
+  }
+  return next;
+}
+
+function sortByManualOrder(items: SheetItem[], order: string[]): SheetItem[] {
+  if (items.length <= 1) return items;
+  const idxMap = new Map<string, number>();
+  for (let i = 0; i < order.length; i++) idxMap.set(order[i], i);
+  return [...items].sort((a, b) => {
+    const ai = idxMap.get(a.id);
+    const bi = idxMap.get(b.id);
+    if (ai == null && bi == null) return 0;
+    if (ai == null) return 1;
+    if (bi == null) return -1;
+    return ai - bi;
+  });
+}
 
 /** 목록 등록 조건을 단어 단위 칩으로 표시 */
 function RegChips({
@@ -125,6 +167,8 @@ type SheetGridProps = {
   completingId: string | null;
   onComplete: (item: SheetItem) => void;
   onDescriptionSaved: (id: string, description: string) => void;
+  onMoveUp: (itemId: string) => void;
+  onMoveDown: (itemId: string) => void;
 };
 
 function SheetGrid({
@@ -133,6 +177,8 @@ function SheetGrid({
   completingId,
   onComplete,
   onDescriptionSaved,
+  onMoveUp,
+  onMoveDown,
 }: SheetGridProps) {
   if (list.length === 0) {
     return (
@@ -152,6 +198,10 @@ function SheetGrid({
             completing={completingId === item.id}
             onComplete={onComplete}
             onDescriptionSaved={onDescriptionSaved}
+            onMoveUp={() => onMoveUp(item.id)}
+            onMoveDown={() => onMoveDown(item.id)}
+            canMoveUp={list[0]?.id !== item.id}
+            canMoveDown={list[list.length - 1]?.id !== item.id}
           />
         </li>
       ))}
@@ -187,6 +237,15 @@ export function WasokDashboard() {
   const [restoringId, setRestoringId] = React.useState<string | null>(null);
   const [registerInput, setRegisterInput] = React.useState("");
   const [registering, setRegistering] = React.useState(false);
+  const [manualInfoOrder, setManualInfoOrder] = React.useState<string[]>(() =>
+    readIdOrderFromStorage(MANUAL_ORDER_INFO_KEY)
+  );
+  const [manualCollectOrder, setManualCollectOrder] = React.useState<string[]>(() =>
+    readIdOrderFromStorage(MANUAL_ORDER_COLLECT_KEY)
+  );
+  const [manualCompletedOrder, setManualCompletedOrder] = React.useState<string[]>(
+    () => readIdOrderFromStorage(MANUAL_ORDER_COMPLETED_KEY)
+  );
 
   const itemsRef = React.useRef(items);
   const collectRef = React.useRef(collectItems);
@@ -272,19 +331,58 @@ export function WasokDashboard() {
     window.localStorage.setItem(SORT_STORAGE_KEY, sortKey);
   }, [sortKey]);
 
+  React.useEffect(() => {
+    setManualInfoOrder((prev) => reconcileOrder(prev, items));
+  }, [items]);
+
+  React.useEffect(() => {
+    setManualCollectOrder((prev) => reconcileOrder(prev, collectItems));
+  }, [collectItems]);
+
+  React.useEffect(() => {
+    setManualCompletedOrder((prev) => reconcileOrder(prev, completedItems));
+  }, [completedItems]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(MANUAL_ORDER_INFO_KEY, JSON.stringify(manualInfoOrder));
+  }, [manualInfoOrder]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(
+      MANUAL_ORDER_COLLECT_KEY,
+      JSON.stringify(manualCollectOrder)
+    );
+  }, [manualCollectOrder]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(
+      MANUAL_ORDER_COMPLETED_KEY,
+      JSON.stringify(manualCompletedOrder)
+    );
+  }, [manualCompletedOrder]);
+
   const visibleMain = React.useMemo(
-    () => sortItems(filterItems(items, query), sortKey),
-    [items, query, sortKey]
+    () =>
+      sortKey === "manual"
+        ? sortByManualOrder(filterItems(items, query), manualInfoOrder)
+        : sortItems(filterItems(items, query), sortKey),
+    [items, query, sortKey, manualInfoOrder]
   );
 
   const visibleCollect = React.useMemo(
-    () => sortItems(filterItems(collectItems, query), sortKey),
-    [collectItems, query, sortKey]
+    () =>
+      sortKey === "manual"
+        ? sortByManualOrder(filterItems(collectItems, query), manualCollectOrder)
+        : sortItems(filterItems(collectItems, query), sortKey),
+    [collectItems, query, sortKey, manualCollectOrder]
   );
 
   const visibleCompleted = React.useMemo(
-    () => sortItems(filterItems(completedItems, query), sortKey),
-    [completedItems, query, sortKey]
+    () =>
+      sortKey === "manual"
+        ? sortByManualOrder(filterItems(completedItems, query), manualCompletedOrder)
+        : sortItems(filterItems(completedItems, query), sortKey),
+    [completedItems, query, sortKey, manualCompletedOrder]
   );
 
   const totalFiltered =
@@ -433,6 +531,47 @@ export function WasokDashboard() {
     }
   }, [loadSheets, registerInput]);
 
+  const moveIdInOrder = React.useCallback(
+    (currentOrder: string[], itemId: string, direction: "up" | "down"): string[] => {
+      const next = [...currentOrder];
+      const idx = next.indexOf(itemId);
+      if (idx < 0) return next;
+      const swapWith = direction === "up" ? idx - 1 : idx + 1;
+      if (swapWith < 0 || swapWith >= next.length) return next;
+      const tmp = next[idx];
+      next[idx] = next[swapWith];
+      next[swapWith] = tmp;
+      return next;
+    },
+    []
+  );
+
+  const handleMoveInInfo = React.useCallback(
+    (itemId: string, direction: "up" | "down") => {
+      setManualInfoOrder((prev) =>
+        moveIdInOrder(reconcileOrder(prev, items), itemId, direction)
+      );
+      if (sortKey !== "manual") {
+        setSortKey("manual");
+        toast.success("직접 정렬 모드로 전환했습니다.");
+      }
+    },
+    [items, moveIdInOrder, sortKey]
+  );
+
+  const handleMoveInCollect = React.useCallback(
+    (itemId: string, direction: "up" | "down") => {
+      setManualCollectOrder((prev) =>
+        moveIdInOrder(reconcileOrder(prev, collectItems), itemId, direction)
+      );
+      if (sortKey !== "manual") {
+        setSortKey("manual");
+        toast.success("직접 정렬 모드로 전환했습니다.");
+      }
+    },
+    [collectItems, moveIdInOrder, sortKey]
+  );
+
   return (
     <div className="min-h-screen bg-slate-100/90 dark:bg-slate-950">
       <header className="border-border/40 text-primary-foreground border-b bg-[#183963] shadow-md">
@@ -557,6 +696,8 @@ export function WasokDashboard() {
                     completingId={completingId}
                     onComplete={handleComplete}
                     onDescriptionSaved={patchDescription}
+                    onMoveUp={(itemId) => handleMoveInInfo(itemId, "up")}
+                    onMoveDown={(itemId) => handleMoveInInfo(itemId, "down")}
                   />
                 </div>
               </section>
@@ -586,6 +727,8 @@ export function WasokDashboard() {
                     completingId={completingId}
                     onComplete={handleComplete}
                     onDescriptionSaved={patchDescription}
+                    onMoveUp={(itemId) => handleMoveInCollect(itemId, "up")}
+                    onMoveDown={(itemId) => handleMoveInCollect(itemId, "down")}
                   />
                 </div>
               </section>

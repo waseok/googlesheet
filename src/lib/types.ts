@@ -58,6 +58,7 @@ export interface GasRegisterResponse {
 
 /** 정렬 옵션: UI에서 사용 */
 export type SortKey =
+  | "manual"
   | "lastUpdated_desc"
   | "lastUpdated_asc"
   | "created_desc"
