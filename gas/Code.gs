@@ -17,6 +17,7 @@
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN
  *   - LIST_YEAR (선택, 기본 2026)
+ *   - SEARCH_CORPORA (선택, 기본 domain) — 목록 자동 검색 범위(domain | user)
  *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 My Drive 루트
  * ============================================================================
  */
@@ -28,6 +29,19 @@ var COLLECT_MARK = '취합';
 var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
+var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
+
+/**
+ * 목록 자동 수집 검색 코퍼스:
+ * - script property SEARCH_CORPORA 가 있으면 우선 (domain | user)
+ * - 기본값은 domain (학교 조직 공유 파일 자동 수집 목적)
+ */
+function getSearchCorpora_() {
+  var v = PropertiesService.getScriptProperties().getProperty('SEARCH_CORPORA');
+  if (!v) return 'domain';
+  v = String(v).toLowerCase().trim();
+  return v === 'user' ? 'user' : 'domain';
+}
 
 function getCompletedFolderId_() {
   var id = PropertiesService.getScriptProperties().getProperty('COMPLETED_FOLDER_ID');
@@ -245,10 +259,11 @@ function moveDriveFileToFolder_(f, targetFolderId) {
 function searchDomainFiles_(query) {
   var allFiles = [];
   var pageToken = null;
+  var corpora = getSearchCorpora_();
   do {
     var params = {
       q: query,
-      corpora: 'user',
+      corpora: corpora,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
       fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
@@ -328,6 +343,84 @@ function setRegisteredFileIds_(ids) {
     REGISTERED_FILE_IDS_PROP,
     JSON.stringify(out)
   );
+}
+
+/**
+ * ScriptProperties 에 저장된 "가상 완료" fileId 목록(JSON 배열)을 읽습니다.
+ * 이동 권한이 없어 실제 폴더 이동이 실패한 파일을 완료 상태로 관리할 때 사용합니다.
+ * @returns {Array<string>}
+ */
+function getVirtualCompletedFileIds_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(VIRTUAL_COMPLETED_FILE_IDS_PROP);
+  if (!raw) {
+    return [];
+  }
+  try {
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var v = parsed[i];
+      if (typeof v !== 'string') continue;
+      var id = v.trim();
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * "가상 완료" fileId 목록을 ScriptProperties(JSON 배열)으로 저장합니다.
+ * @param {Array<string>} ids
+ */
+function setVirtualCompletedFileIds_(ids) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var v = ids[i];
+    if (typeof v !== 'string') continue;
+    var id = v.trim();
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    out.push(id);
+  }
+  PropertiesService.getScriptProperties().setProperty(
+    VIRTUAL_COMPLETED_FILE_IDS_PROP,
+    JSON.stringify(out)
+  );
+}
+
+/**
+ * 가상 완료 목록에 fileId를 추가합니다.
+ * @param {string} fileId
+ */
+function addVirtualCompletedFileId_(fileId) {
+  var ids = getVirtualCompletedFileIds_();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] === fileId) return;
+  }
+  ids.push(fileId);
+  setVirtualCompletedFileIds_(ids);
+}
+
+/**
+ * 가상 완료 목록에서 fileId를 제거합니다.
+ * @param {string} fileId
+ */
+function removeVirtualCompletedFileId_(fileId) {
+  var ids = getVirtualCompletedFileIds_();
+  var next = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] !== fileId) next.push(ids[i]);
+  }
+  setVirtualCompletedFileIds_(next);
 }
 
 /**
@@ -471,19 +564,47 @@ function listCompletedFolderSheets_() {
 }
 
 /**
+ * 가상 완료 목록 파일(실제 이동 실패 폴백)을 조회합니다.
+ * @returns {Array<Object>}
+ */
+function listVirtualCompletedSheets_() {
+  var ids = getVirtualCompletedFileIds_();
+  var rows = [];
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    try {
+      var f = getDriveFileById_(id);
+      if (driveObjPassesListRules_(f)) {
+        rows.push(driveObjToItem_(f));
+      }
+    } catch (ignore) {}
+  }
+  return sortItemsByLastUpdatedDesc_(rows);
+}
+
+/**
  * 메인 목록 — Drive API v3 도메인 검색
  * corpora: 'domain' 으로 소유자가 열지 않아도 조직 공유 파일이 모두 검색됨
  */
 function listWasokSheets() {
   try {
     var doneId = getCompletedFolderId_();
+    var virtualDoneIds = getVirtualCompletedFileIds_();
+    var virtualDoneMap = {};
+    for (var vd = 0; vd < virtualDoneIds.length; vd++) {
+      virtualDoneMap[virtualDoneIds[vd]] = true;
+    }
     // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
     var allFiles = searchDomainFiles_(query);
     var byId = {};
     for (var i = 0; i < allFiles.length; i++) {
       var f = allFiles[i];
-      if (driveObjPassesListRules_(f) && !driveObjIsInFolder_(f, doneId)) {
+      if (
+        driveObjPassesListRules_(f) &&
+        !driveObjIsInFolder_(f, doneId) &&
+        !virtualDoneMap[f.id]
+      ) {
         byId[f.id] = driveObjToItem_(f);
       }
     }
@@ -495,7 +616,11 @@ function listWasokSheets() {
       }
       try {
         var rf = getDriveFileById_(rid);
-        if (driveObjPassesListRules_(rf) && !driveObjIsInFolder_(rf, doneId)) {
+        if (
+          driveObjPassesListRules_(rf) &&
+          !driveObjIsInFolder_(rf, doneId) &&
+          !virtualDoneMap[rid]
+        ) {
           byId[rid] = driveObjToItem_(rf);
         }
       } catch (ignore) {}
@@ -511,7 +636,22 @@ function listWasokSheets() {
     var parts = partitionByTitleMarks_(sorted);
     parts.items = sortItemsByLastUpdatedDesc_(parts.items);
     parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
-    var completedItems = listCompletedFolderSheets_();
+    var completedById = {};
+    var physicalCompleted = listCompletedFolderSheets_();
+    for (var pc = 0; pc < physicalCompleted.length; pc++) {
+      completedById[physicalCompleted[pc].id] = physicalCompleted[pc];
+    }
+    var virtualCompleted = listVirtualCompletedSheets_();
+    for (var vc = 0; vc < virtualCompleted.length; vc++) {
+      completedById[virtualCompleted[vc].id] = virtualCompleted[vc];
+    }
+    var completedItems = [];
+    for (var cid in completedById) {
+      if (Object.prototype.hasOwnProperty.call(completedById, cid)) {
+        completedItems.push(completedById[cid]);
+      }
+    }
+    completedItems = sortItemsByLastUpdatedDesc_(completedItems);
 
     return { ok: true, items: parts.items, collectItems: parts.collectItems, completedItems: completedItems };
   } catch (e) {
@@ -557,9 +697,22 @@ function moveFileToCompleted(fileId) {
     var gate = assertDriveObjAllowedForHub_(file);
     if (!gate.ok) return { ok: false, error: gate.error };
     moveDriveFileToFolder_(file, folderId);
+    removeVirtualCompletedFileId_(fileId);
     return { ok: true, message: '완료 폴더로 이동했습니다.', id: fileId };
   } catch (e) {
-    return { ok: false, error: String(e && e.message ? e.message : e) };
+    var msg = String(e && e.message ? e.message : e);
+    // 파일 이동 권한(원본 부모 제거 권한)이 없을 때는 "가상 완료"로 폴백 처리합니다.
+    if (msg.indexOf('sufficient permissions') !== -1) {
+      addVirtualCompletedFileId_(fileId);
+      return {
+        ok: true,
+        id: fileId,
+        message: '이동 권한이 없어 가상 완료로 처리했습니다.',
+        moved: false,
+        virtualCompleted: true,
+      };
+    }
+    return { ok: false, error: msg };
   }
 }
 
@@ -567,11 +720,26 @@ function restoreFileFromCompleted(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   try {
     var file = getDriveFileById_(fileId, 'id, name, mimeType, createdTime, parents');
-    var gate = assertDriveObjRestoreAllowed_(file);
-    if (!gate.ok) return { ok: false, error: gate.error };
+    var inVirtual = false;
+    var vIds = getVirtualCompletedFileIds_();
+    for (var i = 0; i < vIds.length; i++) {
+      if (vIds[i] === fileId) {
+        inVirtual = true;
+        break;
+      }
+    }
+    if (!inVirtual) {
+      var gate = assertDriveObjRestoreAllowed_(file);
+      if (!gate.ok) return { ok: false, error: gate.error };
+    }
     var dest = getRestoreTargetFolder_();
+    if (inVirtual) {
+      removeVirtualCompletedFileId_(fileId);
+      return { ok: true, message: '가상 완료에서 되돌렸습니다.', id: fileId, moved: false };
+    }
     moveDriveFileToFolder_(file, dest.getId());
-    return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId };
+    removeVirtualCompletedFileId_(fileId);
+    return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId, moved: true };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
