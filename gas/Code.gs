@@ -174,7 +174,7 @@ function searchDomainFiles_(query) {
   do {
     var params = {
       q: query,
-      corpora: 'domain',
+      corpora: 'user',
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
       fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
