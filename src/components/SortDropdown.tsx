@@ -16,12 +16,12 @@ type SortDropdownProps = {
 };
 
 const LABELS: Record<SortKey, string> = {
-  created_desc: "생성일 · 최신순",
-  created_asc: "생성일 · 오래된순",
-  lastUpdated_desc: "수정일 · 최신순",
-  lastUpdated_asc: "수정일 · 오래된순",
-  name_asc: "이름 · 가나다순",
-  name_desc: "이름 · 역순",
+  created_desc: "만든 날짜: 최신순",
+  created_asc: "만든 날짜: 오래된순",
+  lastUpdated_desc: "수정 날짜: 최신순",
+  lastUpdated_asc: "수정 날짜: 오래된순",
+  name_asc: "제목 순서: 가나다순",
+  name_desc: "제목 순서: 역순",
 };
 
 /** Select 트리거에 한글 라벨이 보이도록 items 맵 제공 */

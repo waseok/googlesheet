@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
  * 연도를 바꾸면 GAS와 함께 이 값도 수정하세요.
  */
 const HUB_LIST_YEAR = 2026;
+const SORT_STORAGE_KEY = "wasok-sort-key";
 
 /** 목록 등록 조건을 단어 단위 칩으로 표시 */
 function RegChips({
@@ -167,7 +168,21 @@ export function WasokDashboard() {
   const [completedItems, setCompletedItems] = React.useState<SheetItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [query, setQuery] = React.useState("");
-  const [sortKey, setSortKey] = React.useState<SortKey>("created_desc");
+  const [sortKey, setSortKey] = React.useState<SortKey>(() => {
+    if (typeof window === "undefined") return "name_asc";
+    const saved = window.localStorage.getItem(SORT_STORAGE_KEY);
+    if (
+      saved === "lastUpdated_desc" ||
+      saved === "lastUpdated_asc" ||
+      saved === "created_desc" ||
+      saved === "created_asc" ||
+      saved === "name_asc" ||
+      saved === "name_desc"
+    ) {
+      return saved;
+    }
+    return "name_asc";
+  });
   const [completingId, setCompletingId] = React.useState<string | null>(null);
   const [restoringId, setRestoringId] = React.useState<string | null>(null);
   const [registerInput, setRegisterInput] = React.useState("");
@@ -252,6 +267,10 @@ export function WasokDashboard() {
   React.useEffect(() => {
     void loadSheets({ force: false });
   }, [loadSheets]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(SORT_STORAGE_KEY, sortKey);
+  }, [sortKey]);
 
   const visibleMain = React.useMemo(
     () => sortItems(filterItems(items, query), sortKey),
@@ -488,7 +507,12 @@ export function WasokDashboard() {
               </Button>
             </div>
           </div>
-          <SortDropdown value={sortKey} onValueChange={setSortKey} />
+          <div className="flex shrink-0 flex-col gap-1">
+            <p className="text-muted-foreground text-xs font-medium">
+              링크 순서 정렬
+            </p>
+            <SortDropdown value={sortKey} onValueChange={setSortKey} />
+          </div>
         </div>
 
         {initialSkeleton ? (
