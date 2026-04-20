@@ -11,13 +11,13 @@
  *
  * [중요] Drive 고급 서비스 활성화 필요:
  *   GAS 편집기 좌측 → 서비스(+) → "Drive API" 추가
- *   → corpora: 'domain' 으로 도메인 전체 조직 공유 파일 검색
- *   → 스크립트 소유자가 직접 열지 않아도 조직 공유된 파일이 자동 반영됨
+ *   → corpora: 'domain' + 'user' 병합 검색 지원
+ *   → 스크립트 소유자가 직접 열지 않아도 조직 공유된 파일(domain) + 내가 읽은/접근 가능한 파일(user) 자동 반영
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN
  *   - LIST_YEAR (선택, 기본 2026)
- *   - SEARCH_CORPORA (선택, 기본 domain) — 목록 자동 검색 범위(domain | user)
+ *   - SEARCH_CORPORA (선택, 기본 both) — 목록 자동 검색 범위(domain | user | both)
  *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 My Drive 루트
  * ============================================================================
  */
@@ -33,14 +33,27 @@ var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
 
 /**
  * 목록 자동 수집 검색 코퍼스:
- * - script property SEARCH_CORPORA 가 있으면 우선 (domain | user)
- * - 기본값은 domain (학교 조직 공유 파일 자동 수집 목적)
+ * - script property SEARCH_CORPORA 가 있으면 우선
+ *   허용값: domain | user | both
+ * - 기본값은 both (조직 검색 + 내 접근기록 기반 검색 병합)
  */
-function getSearchCorpora_() {
+function getSearchCorporaMode_() {
   var v = PropertiesService.getScriptProperties().getProperty('SEARCH_CORPORA');
-  if (!v) return 'domain';
+  if (!v) return 'both';
   v = String(v).toLowerCase().trim();
-  return v === 'user' ? 'user' : 'domain';
+  if (v === 'domain' || v === 'user' || v === 'both') return v;
+  return 'both';
+}
+
+/**
+ * 현재 SEARCH_CORPORA 모드에서 실제 조회할 corpora 목록
+ * @returns {Array<string>}
+ */
+function getSearchCorporaList_() {
+  var mode = getSearchCorporaMode_();
+  if (mode === 'domain') return ['domain'];
+  if (mode === 'user') return ['user'];
+  return ['domain', 'user'];
 }
 
 function getCompletedFolderId_() {
@@ -258,23 +271,33 @@ function moveDriveFileToFolder_(f, targetFolderId) {
  */
 function searchDomainFiles_(query) {
   var allFiles = [];
-  var pageToken = null;
-  var corpora = getSearchCorpora_();
-  do {
-    var params = {
-      q: query,
-      corpora: corpora,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
-      pageSize: 1000,
-    };
-    if (pageToken) params.pageToken = pageToken;
-    var resp = Drive.Files.list(params);
-    var files = resp.files || [];
-    allFiles = allFiles.concat(files);
-    pageToken = resp.nextPageToken || null;
-  } while (pageToken);
+  var byId = {};
+  var corporaList = getSearchCorporaList_();
+  for (var c = 0; c < corporaList.length; c++) {
+    var pageToken = null;
+    var corpora = corporaList[c];
+    do {
+      var params = {
+        q: query,
+        corpora: corpora,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
+        pageSize: 1000,
+      };
+      if (pageToken) params.pageToken = pageToken;
+      var resp = Drive.Files.list(params);
+      var files = resp.files || [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (f && f.id && !byId[f.id]) {
+          byId[f.id] = true;
+          allFiles.push(f);
+        }
+      }
+      pageToken = resp.nextPageToken || null;
+    } while (pageToken);
+  }
   return allFiles;
 }
 
