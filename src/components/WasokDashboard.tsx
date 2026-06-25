@@ -17,6 +17,7 @@ import {
 } from "@/lib/active-sheets";
 import { readSheetCacheStaleOk, writeSheetCache } from "@/lib/sheet-cache";
 import { ActiveSheetBoard } from "@/components/ActiveSheetBoard";
+import { HubListingRules } from "@/components/HubListingRules";
 import { SearchBar } from "@/components/SearchBar";
 import { SortDropdown } from "@/components/SortDropdown";
 import { CompletedFolderList } from "@/components/CompletedFolderList";
@@ -24,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-const HUB_LIST_YEAR = 2026;
 const SORT_STORAGE_KEY = "wasok-sort-key";
 const MANUAL_ORDER_ACTIVE_KEY = "wasok-manual-order-active";
 const MANUAL_ORDER_INFO_KEY = "wasok-manual-order-info";
@@ -571,26 +571,13 @@ export function WasokDashboard() {
               <p className="text-primary-foreground/85 text-sm font-medium tracking-wide">
                 업무용 시트 관리
               </p>
-              <h1 className="flex flex-col gap-1.5 text-xl font-bold tracking-tight sm:text-2xl">
-                <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span>
-                    와석초등학교{" "}
-                    <span className="text-primary-foreground/90 font-semibold">
-                      시트 허브
-                    </span>
-                  </span>
-                  <RegChips
-                    variant="header"
-                    chips={[
-                      "[와석초]",
-                      "구글시트",
-                      `${HUB_LIST_YEAR}년생성`,
-                      "조직공유",
-                      "검색+수동등록",
-                    ]}
-                  />
+              <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+                와석초등학교{" "}
+                <span className="text-primary-foreground/90 font-semibold">
+                  시트 허브
                 </span>
               </h1>
+              <HubListingRules />
             </div>
           </div>
           <Button
@@ -726,13 +713,7 @@ export function WasokDashboard() {
                   >
                     <span>완료 폴더</span>
                     <RegChips
-                      chips={[
-                        "[와석초]",
-                        `${HUB_LIST_YEAR}년`,
-                        "시트",
-                        "완료폴더",
-                        "직속",
-                      ]}
+                      chips={["[와석초]", "시트", "완료폴더", "직속"]}
                     />
                   </h2>
                   <span className="text-muted-foreground text-sm font-medium tabular-nums">

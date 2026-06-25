@@ -3,8 +3,7 @@
  * 와석초 구글 시트 통합 관리 대시보드 (Wasok Sheet Hub) - Google Apps Script
  * ============================================================================
  * 목록 규칙:
- *   - 제목에 "[와석초]" 가 정확히 들어간 스프레드시트만
- *   - 생성일(createdTime)이 LIST_YEAR 연도인 것만
+ *   - 제목에 "[와석초]" 가 포함된 스프레드시트만 (생성 연도 무관)
  *   - 제목에 "취합"이 있으면 collectItems 로
  *   - 그 외 중 제목에 "정보"가 있으면 items(정보 시트 구역)로. 둘 다 없으면 표시하지 않음
  *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 시트 목록 (하단 구역 표시용)
@@ -16,14 +15,12 @@
  *
  * 스크립트 속성:
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN
- *   - LIST_YEAR (선택, 기본 2026)
  *   - SEARCH_CORPORA (선택, 기본 both) — 목록 자동 검색 범위(domain | user | both)
  *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 My Drive 루트
  * ============================================================================
  */
 
 var DEFAULT_COMPLETED_FOLDER_ID = '';
-var DEFAULT_LIST_YEAR = 2026;
 var REQUIRED_TITLE_MARK = '[와석초]';
 var COLLECT_MARK = '취합';
 var INFO_MARK = '정보';
@@ -72,12 +69,6 @@ function getMutationToken_() {
   return (t && t.length > 0) ? t : '';
 }
 
-function getListYear_() {
-  var y = PropertiesService.getScriptProperties().getProperty('LIST_YEAR');
-  if (y && /^\d{4}$/.test(y)) return parseInt(y, 10);
-  return DEFAULT_LIST_YEAR;
-}
-
 function assertMutationAllowed_(tokenFromRequest) {
   var expected = getMutationToken_();
   if (!expected) {
@@ -117,10 +108,6 @@ function assertRestoreAllowed_(file) {
 function assertFileAllowedForHub_(file) {
   if (file.getMimeType() !== SPREADSHEET_MIME) return { ok: false, error: '스프레드시트가 아닙니다.' };
   if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
-  var y = file.getDateCreated().getFullYear();
-  if (y !== getListYear_()) {
-    return { ok: false, error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.' };
-  }
   return { ok: true };
 }
 
@@ -147,8 +134,7 @@ function assertFileAllowedForDescription_(file) {
 function driveObjPassesListRules_(f) {
   if (f.mimeType !== SPREADSHEET_MIME) return false;
   if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) return false;
-  if (!f.createdTime) return false;
-  return new Date(f.createdTime).getFullYear() === getListYear_();
+  return true;
 }
 
 /**
@@ -214,10 +200,6 @@ function assertDriveObjAllowedForHub_(f) {
   }
   if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
     return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
-  }
-  var ct = f.createdTime ? new Date(f.createdTime) : null;
-  if (!ct || isNaN(ct.getTime()) || ct.getFullYear() !== getListYear_()) {
-    return { ok: false, error: getListYear_() + '년에 생성된 시트만 완료 처리할 수 있습니다.' };
   }
   return { ok: true };
 }
@@ -449,7 +431,7 @@ function removeVirtualCompletedFileId_(fileId) {
 /**
  * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
  * - 권한 확인: DriveApp.getFileById 성공 필요
- * - 허브 규칙([와석초], 생성연도, 시트 MIME) 통과 필요
+ * - 허브 규칙([와석초], 시트 MIME) 통과 필요
  * @param {string} fileId
  * @returns {{ ok: boolean, id?: string, item?: Object, alreadyRegistered?: boolean, error?: string }}
  */
