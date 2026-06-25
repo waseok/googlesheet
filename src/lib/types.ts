@@ -56,6 +56,18 @@ export interface GasRegisterResponse {
   error?: string;
 }
 
+/** 진행 중 시트 구역 — GAS 분류와 동일 */
+export type SheetSegment = "info" | "collect";
+
+/** 통합 게시판 탭 필터 */
+export type ActiveTabFilter = "all" | "info" | "collect";
+
+/** 정보·취합을 합친 게시판 한 행 */
+export interface ActiveSheetEntry {
+  item: SheetItem;
+  segment: SheetSegment;
+}
+
 /** 정렬 옵션: UI에서 사용 */
 export type SortKey =
   | "manual"

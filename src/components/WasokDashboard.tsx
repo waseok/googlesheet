@@ -3,25 +3,41 @@
 import * as React from "react";
 import Image from "next/image";
 import { toast } from "sonner";
-import type { SheetItem, SortKey } from "@/lib/types";
+import type { ActiveTabFilter, SheetItem, SortKey } from "@/lib/types";
+import {
+  allActiveItems,
+  applyGroupCollectFirst,
+  filterActiveEntries,
+  mergeActiveEntries,
+  migrateLegacyManualOrder,
+  moveIdInVisibleOrder,
+  reconcileOrder,
+  sortActiveEntries,
+  sortByManualOrder,
+} from "@/lib/active-sheets";
 import { readSheetCacheStaleOk, writeSheetCache } from "@/lib/sheet-cache";
+import { ActiveSheetBoard } from "@/components/ActiveSheetBoard";
 import { SearchBar } from "@/components/SearchBar";
 import { SortDropdown } from "@/components/SortDropdown";
 import { CompletedFolderList } from "@/components/CompletedFolderList";
-import { SheetCard, type SheetCardSegment } from "@/components/SheetCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-/**
- * GAS `DEFAULT_LIST_YEAR` / 스크립트 속성 LIST_YEAR 기본과 맞춰 안내합니다.
- * 연도를 바꾸면 GAS와 함께 이 값도 수정하세요.
- */
 const HUB_LIST_YEAR = 2026;
 const SORT_STORAGE_KEY = "wasok-sort-key";
+const MANUAL_ORDER_ACTIVE_KEY = "wasok-manual-order-active";
 const MANUAL_ORDER_INFO_KEY = "wasok-manual-order-info";
 const MANUAL_ORDER_COLLECT_KEY = "wasok-manual-order-collect";
 const MANUAL_ORDER_COMPLETED_KEY = "wasok-manual-order-completed";
+const GROUP_COLLECT_FIRST_KEY = "wasok-group-collect-first";
+const ACTIVE_TAB_KEY = "wasok-active-tab";
+
+const TAB_OPTIONS: { id: ActiveTabFilter; label: string }[] = [
+  { id: "all", label: "전체" },
+  { id: "info", label: "정보" },
+  { id: "collect", label: "취합" },
+];
 
 function readIdOrderFromStorage(key: string): string[] {
   if (typeof window === "undefined") return [];
@@ -36,33 +52,21 @@ function readIdOrderFromStorage(key: string): string[] {
   }
 }
 
-function reconcileOrder(order: string[], items: SheetItem[]): string[] {
-  const itemIdSet = new Set(items.map((x) => x.id));
-  const next: string[] = [];
-  for (const id of order) {
-    if (itemIdSet.has(id)) next.push(id);
-  }
-  for (const item of items) {
-    if (!next.includes(item.id)) next.push(item.id);
-  }
-  return next;
+function readBoolFromStorage(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+  const raw = window.localStorage.getItem(key);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return fallback;
 }
 
-function sortByManualOrder(items: SheetItem[], order: string[]): SheetItem[] {
-  if (items.length <= 1) return items;
-  const idxMap = new Map<string, number>();
-  for (let i = 0; i < order.length; i++) idxMap.set(order[i], i);
-  return [...items].sort((a, b) => {
-    const ai = idxMap.get(a.id);
-    const bi = idxMap.get(b.id);
-    if (ai == null && bi == null) return 0;
-    if (ai == null) return 1;
-    if (bi == null) return -1;
-    return ai - bi;
-  });
+function readActiveTabFromStorage(): ActiveTabFilter {
+  if (typeof window === "undefined") return "all";
+  const raw = window.localStorage.getItem(ACTIVE_TAB_KEY);
+  if (raw === "info" || raw === "collect" || raw === "all") return raw;
+  return "all";
 }
 
-/** 목록 등록 조건을 단어 단위 칩으로 표시 */
 function RegChips({
   chips,
   variant = "card",
@@ -118,6 +122,8 @@ function filterItems(items: SheetItem[], query: string): SheetItem[] {
 function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   const copy = [...items];
   switch (sortKey) {
+    case "manual":
+      return copy;
     case "lastUpdated_desc":
       return copy.sort((a, b) =>
         a.lastUpdated < b.lastUpdated ? 1 : a.lastUpdated > b.lastUpdated ? -1 : 0
@@ -147,12 +153,20 @@ function sortItems(items: SheetItem[], sortKey: SortKey): SheetItem[] {
   }
 }
 
-/**
- * 구글 시트 URL 또는 raw fileId 입력에서 fileId를 추출합니다.
- * 허용 예:
- * - https://docs.google.com/spreadsheets/d/<fileId>/edit...
- * - <fileId>
- */
+function sortByManualOrderItems(items: SheetItem[], order: string[]): SheetItem[] {
+  if (items.length <= 1) return items;
+  const idxMap = new Map<string, number>();
+  for (let i = 0; i < order.length; i++) idxMap.set(order[i], i);
+  return [...items].sort((a, b) => {
+    const ai = idxMap.get(a.id);
+    const bi = idxMap.get(b.id);
+    if (ai == null && bi == null) return 0;
+    if (ai == null) return 1;
+    if (bi == null) return -1;
+    return ai - bi;
+  });
+}
+
 function extractFileId(raw: string): string {
   const text = raw.trim();
   if (!text) return "";
@@ -161,56 +175,24 @@ function extractFileId(raw: string): string {
   return /^[a-zA-Z0-9-_]{20,}$/.test(text) ? text : "";
 }
 
-type SheetGridProps = {
-  segment: SheetCardSegment;
-  list: SheetItem[];
-  completingId: string | null;
-  onComplete: (item: SheetItem) => void;
-  onDescriptionSaved: (id: string, description: string) => void;
-  onMoveUp: (itemId: string) => void;
-  onMoveDown: (itemId: string) => void;
-};
-
-function SheetGrid({
-  segment,
-  list,
-  completingId,
-  onComplete,
-  onDescriptionSaved,
-  onMoveUp,
-  onMoveDown,
-}: SheetGridProps) {
-  if (list.length === 0) {
-    return (
-      <p className="text-muted-foreground py-10 text-center text-sm">
-        표시할 시트가 없습니다.
-      </p>
-    );
+function readInitialManualActiveOrder(
+  items: SheetItem[],
+  collectItems: SheetItem[]
+): string[] {
+  const active = readIdOrderFromStorage(MANUAL_ORDER_ACTIVE_KEY);
+  if (active.length > 0) {
+    return reconcileOrder(active, allActiveItems(items, collectItems));
   }
-  // 한 줄에 시트 카드 2개 (넓은 화면에서도 3열로 늘리지 않음)
-  return (
-    <ul className="grid grid-cols-2 gap-3">
-      {list.map((item) => (
-        <li key={item.id}>
-          <SheetCard
-            segment={segment}
-            item={item}
-            completing={completingId === item.id}
-            onComplete={onComplete}
-            onDescriptionSaved={onDescriptionSaved}
-            onMoveUp={() => onMoveUp(item.id)}
-            onMoveDown={() => onMoveDown(item.id)}
-            canMoveUp={list[0]?.id !== item.id}
-            canMoveDown={list[list.length - 1]?.id !== item.id}
-          />
-        </li>
-      ))}
-    </ul>
+  return migrateLegacyManualOrder(
+    readIdOrderFromStorage(MANUAL_ORDER_INFO_KEY),
+    readIdOrderFromStorage(MANUAL_ORDER_COLLECT_KEY),
+    items,
+    collectItems
   );
 }
 
 /**
- * 와석초 시트 허브 — 정보 시트 / 취합 / 완료 폴더(하단)
+ * 와석초 시트 허브 — 통합 게시판(정보+취합) + 완료 폴더
  */
 export function WasokDashboard() {
   const [items, setItems] = React.useState<SheetItem[]>([]);
@@ -218,10 +200,15 @@ export function WasokDashboard() {
   const [completedItems, setCompletedItems] = React.useState<SheetItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [query, setQuery] = React.useState("");
+  const [activeTab, setActiveTab] = React.useState<ActiveTabFilter>(readActiveTabFromStorage);
+  const [groupCollectFirst, setGroupCollectFirst] = React.useState(() =>
+    readBoolFromStorage(GROUP_COLLECT_FIRST_KEY, true)
+  );
   const [sortKey, setSortKey] = React.useState<SortKey>(() => {
     if (typeof window === "undefined") return "name_asc";
     const saved = window.localStorage.getItem(SORT_STORAGE_KEY);
     if (
+      saved === "manual" ||
       saved === "lastUpdated_desc" ||
       saved === "lastUpdated_asc" ||
       saved === "created_desc" ||
@@ -237,15 +224,11 @@ export function WasokDashboard() {
   const [restoringId, setRestoringId] = React.useState<string | null>(null);
   const [registerInput, setRegisterInput] = React.useState("");
   const [registering, setRegistering] = React.useState(false);
-  const [manualInfoOrder, setManualInfoOrder] = React.useState<string[]>(() =>
-    readIdOrderFromStorage(MANUAL_ORDER_INFO_KEY)
+  const [manualActiveOrder, setManualActiveOrder] = React.useState<string[]>([]);
+  const [manualCompletedOrder, setManualCompletedOrder] = React.useState<string[]>(() =>
+    readIdOrderFromStorage(MANUAL_ORDER_COMPLETED_KEY)
   );
-  const [manualCollectOrder, setManualCollectOrder] = React.useState<string[]>(() =>
-    readIdOrderFromStorage(MANUAL_ORDER_COLLECT_KEY)
-  );
-  const [manualCompletedOrder, setManualCompletedOrder] = React.useState<string[]>(
-    () => readIdOrderFromStorage(MANUAL_ORDER_COMPLETED_KEY)
-  );
+  const manualBootstrapped = React.useRef(false);
 
   const itemsRef = React.useRef(items);
   const collectRef = React.useRef(collectItems);
@@ -272,7 +255,6 @@ export function WasokDashboard() {
   const loadSheets = React.useCallback(async (opts: { force: boolean }) => {
     const peek = readSheetCacheStaleOk();
 
-    // 캐시가 있으면 즉시 화면에 반영 (만료됐어도 stale-while-revalidate)
     if (!opts.force && peek.fromStorage) {
       setItems(peek.items);
       setCollectItems(peek.collectItems);
@@ -283,7 +265,6 @@ export function WasokDashboard() {
       }
     }
 
-    // 첫 방문·강제 새로고침: 캐시 없을 때만 전체 로딩 스피너
     const showBlockingSpinner = opts.force || !peek.fromStorage;
     if (showBlockingSpinner) {
       setLoading(true);
@@ -328,31 +309,40 @@ export function WasokDashboard() {
   }, [loadSheets]);
 
   React.useEffect(() => {
+    if (manualBootstrapped.current) return;
+    if (items.length === 0 && collectItems.length === 0) return;
+    manualBootstrapped.current = true;
+    setManualActiveOrder(readInitialManualActiveOrder(items, collectItems));
+  }, [items, collectItems]);
+
+  React.useEffect(() => {
     window.localStorage.setItem(SORT_STORAGE_KEY, sortKey);
   }, [sortKey]);
 
   React.useEffect(() => {
-    setManualInfoOrder((prev) => reconcileOrder(prev, items));
-  }, [items]);
+    window.localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+  }, [activeTab]);
 
   React.useEffect(() => {
-    setManualCollectOrder((prev) => reconcileOrder(prev, collectItems));
-  }, [collectItems]);
+    window.localStorage.setItem(GROUP_COLLECT_FIRST_KEY, String(groupCollectFirst));
+  }, [groupCollectFirst]);
+
+  React.useEffect(() => {
+    setManualActiveOrder((prev) =>
+      reconcileOrder(prev, allActiveItems(items, collectItems))
+    );
+  }, [items, collectItems]);
 
   React.useEffect(() => {
     setManualCompletedOrder((prev) => reconcileOrder(prev, completedItems));
   }, [completedItems]);
 
   React.useEffect(() => {
-    window.localStorage.setItem(MANUAL_ORDER_INFO_KEY, JSON.stringify(manualInfoOrder));
-  }, [manualInfoOrder]);
-
-  React.useEffect(() => {
     window.localStorage.setItem(
-      MANUAL_ORDER_COLLECT_KEY,
-      JSON.stringify(manualCollectOrder)
+      MANUAL_ORDER_ACTIVE_KEY,
+      JSON.stringify(manualActiveOrder)
     );
-  }, [manualCollectOrder]);
+  }, [manualActiveOrder]);
 
   React.useEffect(() => {
     window.localStorage.setItem(
@@ -361,32 +351,46 @@ export function WasokDashboard() {
     );
   }, [manualCompletedOrder]);
 
-  const visibleMain = React.useMemo(
-    () =>
-      sortKey === "manual"
-        ? sortByManualOrder(filterItems(items, query), manualInfoOrder)
-        : sortItems(filterItems(items, query), sortKey),
-    [items, query, sortKey, manualInfoOrder]
-  );
+  const sortedActiveEntries = React.useMemo(() => {
+    let entries = mergeActiveEntries(items, collectItems);
+    if (sortKey === "manual") {
+      entries = sortByManualOrder(entries, manualActiveOrder);
+    } else {
+      entries = sortActiveEntries(entries, sortKey);
+    }
+    if (groupCollectFirst) {
+      entries = applyGroupCollectFirst(entries);
+    }
+    return entries;
+  }, [items, collectItems, sortKey, manualActiveOrder, groupCollectFirst]);
 
-  const visibleCollect = React.useMemo(
-    () =>
-      sortKey === "manual"
-        ? sortByManualOrder(filterItems(collectItems, query), manualCollectOrder)
-        : sortItems(filterItems(collectItems, query), sortKey),
-    [collectItems, query, sortKey, manualCollectOrder]
+  const visibleActive = React.useMemo(
+    () => filterActiveEntries(sortedActiveEntries, query, activeTab),
+    [sortedActiveEntries, query, activeTab]
   );
 
   const visibleCompleted = React.useMemo(
     () =>
       sortKey === "manual"
-        ? sortByManualOrder(filterItems(completedItems, query), manualCompletedOrder)
+        ? sortByManualOrderItems(
+            filterItems(completedItems, query),
+            manualCompletedOrder
+          )
         : sortItems(filterItems(completedItems, query), sortKey),
     [completedItems, query, sortKey, manualCompletedOrder]
   );
 
+  const activeCounts = React.useMemo(
+    () => ({
+      all: items.length + collectItems.length,
+      info: items.length,
+      collect: collectItems.length,
+    }),
+    [items.length, collectItems.length]
+  );
+
   const totalFiltered =
-    visibleMain.length + visibleCollect.length + visibleCompleted.length;
+    visibleActive.length + visibleCompleted.length;
 
   const initialSkeleton =
     loading &&
@@ -395,7 +399,8 @@ export function WasokDashboard() {
     completedItems.length === 0;
 
   const handleComplete = React.useCallback(
-    async (item: SheetItem) => {
+    async (entry: { item: SheetItem }) => {
+      const item = entry.item;
       const prevMain = items;
       const prevCollect = collectItems;
       const prevDone = completedItems;
@@ -403,7 +408,7 @@ export function WasokDashboard() {
       const optimisticCollect = prevCollect.filter((x) => x.id !== item.id);
       const optimisticDone = sortItems(
         [item, ...prevDone.filter((x) => x.id !== item.id)],
-        sortKey
+        sortKey === "manual" ? "lastUpdated_desc" : sortKey
       );
       setItems(optimisticMain);
       setCollectItems(optimisticCollect);
@@ -442,7 +447,6 @@ export function WasokDashboard() {
       const prevMain = items;
       const prevCollect = collectItems;
       const prevDone = completedItems;
-      /** GAS와 동일: "취합"이 있으면 취합 구역, 아니면 정보(items) 구역(구 규칙 시트 포함) */
       const isCollect = item.name.includes("취합");
 
       const withoutDone = prevDone.filter((x) => x.id !== item.id);
@@ -450,12 +454,12 @@ export function WasokDashboard() {
         ? prevMain
         : sortItems(
             [item, ...prevMain.filter((x) => x.id !== item.id)],
-            sortKey
+            sortKey === "manual" ? "name_asc" : sortKey
           );
       const optimisticCollect = isCollect
         ? sortItems(
             [item, ...prevCollect.filter((x) => x.id !== item.id)],
-            sortKey
+            sortKey === "manual" ? "name_asc" : sortKey
           )
         : prevCollect;
 
@@ -531,45 +535,23 @@ export function WasokDashboard() {
     }
   }, [loadSheets, registerInput]);
 
-  const moveIdInOrder = React.useCallback(
-    (currentOrder: string[], itemId: string, direction: "up" | "down"): string[] => {
-      const next = [...currentOrder];
-      const idx = next.indexOf(itemId);
-      if (idx < 0) return next;
-      const swapWith = direction === "up" ? idx - 1 : idx + 1;
-      if (swapWith < 0 || swapWith >= next.length) return next;
-      const tmp = next[idx];
-      next[idx] = next[swapWith];
-      next[swapWith] = tmp;
-      return next;
-    },
-    []
-  );
-
-  const handleMoveInInfo = React.useCallback(
+  const handleMoveActive = React.useCallback(
     (itemId: string, direction: "up" | "down") => {
-      setManualInfoOrder((prev) =>
-        moveIdInOrder(reconcileOrder(prev, items), itemId, direction)
+      const visibleIds = visibleActive.map((e) => e.item.id);
+      setManualActiveOrder((prev) =>
+        moveIdInVisibleOrder(
+          reconcileOrder(prev, allActiveItems(items, collectItems)),
+          visibleIds,
+          itemId,
+          direction
+        )
       );
       if (sortKey !== "manual") {
         setSortKey("manual");
         toast.success("직접 정렬 모드로 전환했습니다.");
       }
     },
-    [items, moveIdInOrder, sortKey]
-  );
-
-  const handleMoveInCollect = React.useCallback(
-    (itemId: string, direction: "up" | "down") => {
-      setManualCollectOrder((prev) =>
-        moveIdInOrder(reconcileOrder(prev, collectItems), itemId, direction)
-      );
-      if (sortKey !== "manual") {
-        setSortKey("manual");
-        toast.success("직접 정렬 모드로 전환했습니다.");
-      }
-    },
-    [collectItems, moveIdInOrder, sortKey]
+    [visibleActive, items, collectItems, sortKey]
   );
 
   return (
@@ -624,7 +606,7 @@ export function WasokDashboard() {
       </header>
 
       <main className="container mx-auto max-w-6xl px-4 py-8">
-        <div className="border-border/60 bg-background/95 mb-8 flex flex-col gap-4 rounded-xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="border-border/60 bg-background/95 mb-6 flex flex-col gap-4 rounded-xl border p-4 shadow-sm lg:flex-row lg:items-end lg:justify-between">
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <SearchBar value={query} onChange={setQuery} />
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -646,11 +628,20 @@ export function WasokDashboard() {
               </Button>
             </div>
           </div>
-          <div className="flex shrink-0 flex-col gap-1">
-            <p className="text-muted-foreground text-xs font-medium">
-              링크 순서 정렬
-            </p>
-            <SortDropdown value={sortKey} onValueChange={setSortKey} />
+          <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={groupCollectFirst}
+                onChange={(e) => setGroupCollectFirst(e.target.checked)}
+                className="border-input text-primary focus-visible:ring-ring size-4 rounded border"
+              />
+              <span className="text-foreground font-medium">취합 시트를 위로</span>
+            </label>
+            <div className="flex flex-col gap-1">
+              <p className="text-muted-foreground text-xs font-medium">링크 순서 정렬</p>
+              <SortDropdown value={sortKey} onValueChange={setSortKey} />
+            </div>
           </div>
         </div>
 
@@ -664,73 +655,64 @@ export function WasokDashboard() {
               </p>
             ) : null}
 
-            <div className="space-y-10">
+            <div className="space-y-8">
               <section
                 className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
-                aria-labelledby="sec-info"
+                aria-labelledby="sec-active"
               >
-                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3 dark:bg-slate-900/50">
-                  <h2
-                    id="sec-info"
-                    className="text-primary border-primary/30 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 pl-3 text-lg font-semibold tracking-tight"
-                  >
-                    <span>정보 시트</span>
-                    <RegChips
-                      chips={[
-                        "[와석초]",
-                        "정보",
-                        "취합없음",
-                        `${HUB_LIST_YEAR}년`,
-                        "시트",
-                      ]}
-                    />
-                  </h2>
-                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
-                    {visibleMain.length}건
+                <div className="border-border/50 flex flex-col gap-3 border-b bg-slate-50/90 px-4 py-3 dark:bg-slate-900/50 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                  <div>
+                    <h2
+                      id="sec-active"
+                      className="text-primary border-primary/30 border-l-4 pl-3 text-lg font-semibold tracking-tight"
+                    >
+                      진행 중 시트
+                    </h2>
+                    <p className="text-muted-foreground mt-1 pl-4 text-xs">
+                      정보·취합을 한 목록에서 확인합니다. 유형 뱃지로 구분됩니다.
+                    </p>
+                  </div>
+                  <span className="text-muted-foreground pl-4 text-sm font-medium tabular-nums sm:pl-0">
+                    {activeCounts.all}건
                   </span>
                 </div>
-                <div className="p-5">
-                  <SheetGrid
-                    segment="info"
-                    list={visibleMain}
-                    completingId={completingId}
-                    onComplete={handleComplete}
-                    onDescriptionSaved={patchDescription}
-                    onMoveUp={(itemId) => handleMoveInInfo(itemId, "up")}
-                    onMoveDown={(itemId) => handleMoveInInfo(itemId, "down")}
-                  />
-                </div>
-              </section>
 
-              <section
-                className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
-                aria-labelledby="sec-collect"
-              >
-                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-emerald-50/60 px-5 py-3 dark:bg-emerald-950/25">
-                  <h2
-                    id="sec-collect"
-                    className="text-emerald-900 dark:text-emerald-100 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 border-emerald-600 pl-3 text-lg font-semibold tracking-tight"
-                  >
-                    <span>취합 시트</span>
-                    <RegChips
-                      chips={["[와석초]", "취합", `${HUB_LIST_YEAR}년`, "시트"]}
-                    />
-                  </h2>
-                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
-                    {visibleCollect.length}건
-                  </span>
+                <div className="border-border/50 flex flex-wrap gap-1.5 border-b px-4 py-2.5">
+                  {TAB_OPTIONS.map((tab) => (
+                    <Button
+                      key={tab.id}
+                      type="button"
+                      size="sm"
+                      variant={activeTab === tab.id ? "default" : "outline"}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={cn(
+                        "h-8 rounded-lg px-3 text-xs",
+                        activeTab === tab.id &&
+                          "bg-[#183963] text-white hover:bg-[#1f4a7c]"
+                      )}
+                    >
+                      {tab.label}
+                      <span className="ml-1.5 tabular-nums opacity-80">
+                        {activeCounts[tab.id]}
+                      </span>
+                    </Button>
+                  ))}
                 </div>
-                <div className="p-5">
-                  <SheetGrid
-                    segment="collect"
-                    list={visibleCollect}
-                    completingId={completingId}
-                    onComplete={handleComplete}
-                    onDescriptionSaved={patchDescription}
-                    onMoveUp={(itemId) => handleMoveInCollect(itemId, "up")}
-                    onMoveDown={(itemId) => handleMoveInCollect(itemId, "down")}
-                  />
-                </div>
+
+                <ActiveSheetBoard
+                  entries={visibleActive}
+                  completingId={completingId}
+                  sortKey={sortKey}
+                  onComplete={handleComplete}
+                  onDescriptionSaved={patchDescription}
+                  onMoveUp={(id) => handleMoveActive(id, "up")}
+                  onMoveDown={(id) => handleMoveActive(id, "down")}
+                  emptyMessage={
+                    query.trim()
+                      ? "검색 조건에 맞는 진행 중 시트가 없습니다."
+                      : "표시할 시트가 없습니다."
+                  }
+                />
               </section>
 
               <section
