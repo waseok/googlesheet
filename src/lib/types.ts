@@ -39,6 +39,9 @@ export interface GasCompleteResponse {
 /** GAS `restoreFileFromCompleted` — 필드 형태가 완료 이동과 동일합니다. */
 export type GasRestoreResponse = GasCompleteResponse;
 
+/** GAS `dismissFromHub_` — 완료 목록에서 허브 표시만 제거 */
+export type GasDismissResponse = GasCompleteResponse;
+
 /** GAS 설명 저장 응답 */
 export interface GasDescriptionResponse {
   ok: boolean;

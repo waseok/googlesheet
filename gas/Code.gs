@@ -27,6 +27,7 @@ var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
 var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
+var DISMISSED_FILE_IDS_PROP = 'DISMISSED_FILE_IDS';
 
 /**
  * 목록 자동 수집 검색 코퍼스:
@@ -429,6 +430,78 @@ function removeVirtualCompletedFileId_(fileId) {
 }
 
 /**
+ * 허브 목록에서 숨긴 fileId 목록(JSON 배열)
+ * @returns {Array<string>}
+ */
+function getDismissedFileIds_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(DISMISSED_FILE_IDS_PROP);
+  if (!raw) return [];
+  try {
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var v = parsed[i];
+      if (typeof v !== 'string') continue;
+      var id = v.trim();
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * @param {Array<string>} ids
+ */
+function setDismissedFileIds_(ids) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var v = ids[i];
+    if (typeof v !== 'string') continue;
+    var id = v.trim();
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    out.push(id);
+  }
+  PropertiesService.getScriptProperties().setProperty(
+    DISMISSED_FILE_IDS_PROP,
+    JSON.stringify(out)
+  );
+}
+
+function addDismissedFileId_(fileId) {
+  var ids = getDismissedFileIds_();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] === fileId) return;
+  }
+  ids.push(fileId);
+  setDismissedFileIds_(ids);
+}
+
+function removeDismissedFileId_(fileId) {
+  var ids = getDismissedFileIds_();
+  var next = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] !== fileId) next.push(ids[i]);
+  }
+  setDismissedFileIds_(next);
+}
+
+function buildIdMap_(ids) {
+  var map = {};
+  for (var i = 0; i < ids.length; i++) {
+    map[ids[i]] = true;
+  }
+  return map;
+}
+
+/**
  * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
  * - 권한 확인: DriveApp.getFileById 성공 필요
  * - 허브 규칙([와석초], 시트 MIME) 통과 필요
@@ -458,6 +531,7 @@ function registerSheetById_(fileId) {
       ids.push(id);
       setRegisteredFileIds_(ids);
     }
+    removeDismissedFileId_(id);
     return {
       ok: true,
       id: id,
@@ -595,10 +669,8 @@ function listWasokSheets() {
   try {
     var doneId = getCompletedFolderId_();
     var virtualDoneIds = getVirtualCompletedFileIds_();
-    var virtualDoneMap = {};
-    for (var vd = 0; vd < virtualDoneIds.length; vd++) {
-      virtualDoneMap[virtualDoneIds[vd]] = true;
-    }
+    var virtualDoneMap = buildIdMap_(virtualDoneIds);
+    var dismissedMap = buildIdMap_(getDismissedFileIds_());
     // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
     var allFiles = searchDomainFiles_(query);
@@ -608,7 +680,8 @@ function listWasokSheets() {
       if (
         driveObjPassesListRules_(f) &&
         !driveObjIsInFolder_(f, doneId) &&
-        !virtualDoneMap[f.id]
+        !virtualDoneMap[f.id] &&
+        !dismissedMap[f.id]
       ) {
         byId[f.id] = driveObjToItem_(f);
       }
@@ -616,7 +689,7 @@ function listWasokSheets() {
     var registeredIds = getRegisteredFileIds_();
     for (var i = 0; i < registeredIds.length; i++) {
       var rid = registeredIds[i];
-      if (byId[rid]) {
+      if (byId[rid] || dismissedMap[rid]) {
         continue;
       }
       try {
@@ -644,11 +717,15 @@ function listWasokSheets() {
     var completedById = {};
     var physicalCompleted = listCompletedFolderSheets_();
     for (var pc = 0; pc < physicalCompleted.length; pc++) {
-      completedById[physicalCompleted[pc].id] = physicalCompleted[pc];
+      if (!dismissedMap[physicalCompleted[pc].id]) {
+        completedById[physicalCompleted[pc].id] = physicalCompleted[pc];
+      }
     }
     var virtualCompleted = listVirtualCompletedSheets_();
     for (var vc = 0; vc < virtualCompleted.length; vc++) {
-      completedById[virtualCompleted[vc].id] = virtualCompleted[vc];
+      if (!dismissedMap[virtualCompleted[vc].id]) {
+        completedById[virtualCompleted[vc].id] = virtualCompleted[vc];
+      }
     }
     var completedItems = [];
     for (var cid in completedById) {
@@ -703,12 +780,13 @@ function moveFileToCompleted(fileId) {
     if (!gate.ok) return { ok: false, error: gate.error };
     moveDriveFileToFolder_(file, folderId);
     removeVirtualCompletedFileId_(fileId);
+    removeDismissedFileId_(fileId);
     return { ok: true, message: '완료 폴더로 이동했습니다.', id: fileId };
   } catch (e) {
     var msg = String(e && e.message ? e.message : e);
-    // 파일 이동 권한(원본 부모 제거 권한)이 없을 때는 "가상 완료"로 폴백 처리합니다.
     if (msg.indexOf('sufficient permissions') !== -1) {
       addVirtualCompletedFileId_(fileId);
+      removeDismissedFileId_(fileId);
       return {
         ok: true,
         id: fileId,
@@ -718,6 +796,37 @@ function moveFileToCompleted(fileId) {
       };
     }
     return { ok: false, error: msg };
+  }
+}
+
+/**
+ * 완료 폴더 항목을 허브 목록에서만 숨깁니다(드라이브 파일은 삭제하지 않음).
+ */
+function dismissFromHub_(fileId) {
+  if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
+  try {
+    var file = getDriveFileById_(fileId, 'id, name, mimeType, parents');
+    if ((file.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
+      return { ok: false, error: '제목에 [와석초]가 포함된 시트만 목록에서 삭제할 수 있습니다.' };
+    }
+    var folderId = getCompletedFolderId_();
+    var inVirtual = false;
+    var vIds = getVirtualCompletedFileIds_();
+    for (var i = 0; i < vIds.length; i++) {
+      if (vIds[i] === fileId) {
+        inVirtual = true;
+        break;
+      }
+    }
+    var inCompleted = folderId && driveObjIsInFolder_(file, folderId);
+    if (!inVirtual && !inCompleted) {
+      return { ok: false, error: '완료 폴더에 있는 시트만 목록에서 삭제할 수 있습니다.' };
+    }
+    removeVirtualCompletedFileId_(fileId);
+    addDismissedFileId_(fileId);
+    return { ok: true, message: '허브 목록에서 삭제했습니다.', id: fileId };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
   }
 }
 
@@ -740,10 +849,12 @@ function restoreFileFromCompleted(fileId) {
     var dest = getRestoreTargetFolder_();
     if (inVirtual) {
       removeVirtualCompletedFileId_(fileId);
+      removeDismissedFileId_(fileId);
       return { ok: true, message: '가상 완료에서 되돌렸습니다.', id: fileId, moved: false };
     }
     moveDriveFileToFolder_(file, dest.getId());
     removeVirtualCompletedFileId_(fileId);
+    removeDismissedFileId_(fileId);
     return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId, moved: true };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
@@ -774,6 +885,12 @@ function doGet(e) {
     return jsonOutput_(restoreFileFromCompleted(params.fileId || ''));
   }
 
+  if (action === 'dismiss' || action === 'remove') {
+    var gateD = assertMutationAllowed_(params.token || '');
+    if (!gateD.ok) return jsonOutput_(gateD);
+    return jsonOutput_(dismissFromHub_(params.fileId || ''));
+  }
+
   return jsonOutput_(listWasokSheets());
 }
 
@@ -800,6 +917,10 @@ function doPost(e) {
 
   if (action === 'restore') {
     return jsonOutput_(restoreFileFromCompleted(body.fileId || ''));
+  }
+
+  if (action === 'dismiss' || action === 'remove') {
+    return jsonOutput_(dismissFromHub_(body.fileId || ''));
   }
 
   return jsonOutput_(moveFileToCompleted(body.fileId || (e.parameter && e.parameter.fileId) || ''));

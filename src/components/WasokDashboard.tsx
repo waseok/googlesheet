@@ -24,6 +24,7 @@ import { CompletedFolderList } from "@/components/CompletedFolderList";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { ChevronDown } from "lucide-react";
 
 const SORT_STORAGE_KEY = "wasok-sort-key";
 const MANUAL_ORDER_ACTIVE_KEY = "wasok-manual-order-active";
@@ -32,6 +33,7 @@ const MANUAL_ORDER_COLLECT_KEY = "wasok-manual-order-collect";
 const MANUAL_ORDER_COMPLETED_KEY = "wasok-manual-order-completed";
 const GROUP_COLLECT_FIRST_KEY = "wasok-group-collect-first";
 const ACTIVE_TAB_KEY = "wasok-active-tab";
+const COMPLETED_COLLAPSED_KEY = "wasok-completed-collapsed";
 
 const TAB_OPTIONS: { id: ActiveTabFilter; label: string }[] = [
   { id: "all", label: "전체" },
@@ -65,38 +67,6 @@ function readActiveTabFromStorage(): ActiveTabFilter {
   const raw = window.localStorage.getItem(ACTIVE_TAB_KEY);
   if (raw === "info" || raw === "collect" || raw === "all") return raw;
   return "all";
-}
-
-function RegChips({
-  chips,
-  variant = "card",
-}: {
-  chips: string[];
-  variant?: "card" | "header";
-}) {
-  return (
-    <span
-      className={cn(
-        "flex flex-wrap items-center gap-1",
-        variant === "header" && "text-primary-foreground/95"
-      )}
-      role="note"
-    >
-      {chips.map((label) => (
-        <span
-          key={label}
-          className={cn(
-            "rounded border px-1.5 py-0.5 text-[10px] font-medium tracking-tight sm:text-[11px]",
-            variant === "header"
-              ? "border-white/25 bg-white/12 text-primary-foreground"
-              : "border-border/60 bg-background/80 text-foreground/90 dark:bg-background/40"
-          )}
-        >
-          {label}
-        </span>
-      ))}
-    </span>
-  );
 }
 
 function primaryTime(it: SheetItem): string {
@@ -222,6 +192,10 @@ export function WasokDashboard() {
   });
   const [completingId, setCompletingId] = React.useState<string | null>(null);
   const [restoringId, setRestoringId] = React.useState<string | null>(null);
+  const [dismissingId, setDismissingId] = React.useState<string | null>(null);
+  const [completedCollapsed, setCompletedCollapsed] = React.useState(() =>
+    readBoolFromStorage(COMPLETED_COLLAPSED_KEY, false)
+  );
   const [registerInput, setRegisterInput] = React.useState("");
   const [registering, setRegistering] = React.useState(false);
   const [manualActiveOrder, setManualActiveOrder] = React.useState<string[]>([]);
@@ -326,6 +300,10 @@ export function WasokDashboard() {
   React.useEffect(() => {
     window.localStorage.setItem(GROUP_COLLECT_FIRST_KEY, String(groupCollectFirst));
   }, [groupCollectFirst]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(COMPLETED_COLLAPSED_KEY, String(completedCollapsed));
+  }, [completedCollapsed]);
 
   React.useEffect(() => {
     setManualActiveOrder((prev) =>
@@ -493,6 +471,49 @@ export function WasokDashboard() {
       }
     },
     [items, collectItems, completedItems, sortKey]
+  );
+
+  const handleDismiss = React.useCallback(
+    async (item: SheetItem) => {
+      if (
+        !window.confirm(
+          `"${item.name}"\n\n허브 목록에서 삭제할까요?\n(구글 시트 파일 자체는 삭제되지 않습니다.)`
+        )
+      ) {
+        return;
+      }
+
+      const prevMain = items;
+      const prevCollect = collectItems;
+      const prevDone = completedItems;
+      const withoutDone = prevDone.filter((x) => x.id !== item.id);
+
+      setCompletedItems(withoutDone);
+      setDismissingId(item.id);
+
+      try {
+        const res = await fetch("/api/sheets/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileId: item.id }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string };
+
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        toast.success("목록에서 삭제했습니다.", { description: item.name });
+        writeSheetCache(prevMain, prevCollect, withoutDone);
+      } catch (e) {
+        setCompletedItems(prevDone);
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.error("목록 삭제에 실패했습니다.", { description: msg });
+      } finally {
+        setDismissingId(null);
+      }
+    },
+    [items, collectItems, completedItems]
   );
 
   const handleRegister = React.useCallback(async () => {
@@ -706,27 +727,41 @@ export function WasokDashboard() {
                 className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm"
                 aria-labelledby="sec-completed"
               >
-                <div className="border-border/50 flex flex-wrap items-center justify-between gap-2 border-b bg-amber-50/70 px-5 py-3 dark:bg-amber-950/20">
-                  <h2
-                    id="sec-completed"
-                    className="text-amber-950 dark:text-amber-100 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-l-4 border-amber-700 pl-3 text-lg font-semibold tracking-tight"
-                  >
-                    <span>완료 폴더</span>
-                    <RegChips
-                      chips={["[와석초]", "시트", "완료폴더", "직속"]}
+                <button
+                  type="button"
+                  id="sec-completed"
+                  onClick={() => setCompletedCollapsed((v) => !v)}
+                  className="border-border/50 flex w-full flex-wrap items-center justify-between gap-2 border-b bg-amber-50/70 px-5 py-3 text-left dark:bg-amber-950/20"
+                  aria-expanded={!completedCollapsed}
+                >
+                  <h2 className="text-amber-950 dark:text-amber-100 flex items-center gap-2 border-l-4 border-amber-700 pl-3 text-lg font-semibold tracking-tight">
+                    <ChevronDown
+                      className={cn(
+                        "size-5 shrink-0 transition-transform",
+                        completedCollapsed && "-rotate-90"
+                      )}
+                      aria-hidden
                     />
+                    <span>완료 폴더</span>
+                    <span className="text-muted-foreground text-sm font-medium tabular-nums">
+                      {visibleCompleted.length}건
+                    </span>
                   </h2>
-                  <span className="text-muted-foreground text-sm font-medium tabular-nums">
-                    {visibleCompleted.length}건
+                  <span className="text-muted-foreground text-xs">
+                    {completedCollapsed ? "펼치기" : "접기"}
                   </span>
-                </div>
-                <div className="p-4 sm:p-5">
-                  <CompletedFolderList
-                    items={visibleCompleted}
-                    restoringId={restoringId}
-                    onRestore={handleRestore}
-                  />
-                </div>
+                </button>
+                {!completedCollapsed ? (
+                  <div className="p-4 sm:p-5">
+                    <CompletedFolderList
+                      items={visibleCompleted}
+                      restoringId={restoringId}
+                      dismissingId={dismissingId}
+                      onRestore={handleRestore}
+                      onDismiss={handleDismiss}
+                    />
+                  </div>
+                ) : null}
               </section>
             </div>
           </>
