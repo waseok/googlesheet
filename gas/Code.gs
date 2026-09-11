@@ -17,6 +17,7 @@
  *   - COMPLETED_FOLDER_ID, MUTATION_TOKEN
  *   - SEARCH_CORPORA (선택, 기본 both) — 목록 자동 검색 범위(domain | user | both)
  *   - RESTORE_FOLDER_ID (선택) — 되돌리기 시 이동할 폴더. 없으면 My Drive 루트
+ *   - VIRTUAL_RESTORED_FILE_IDS — 폴더 이동 권한 없이 허브만 되돌린 fileId (자동 관리)
  * ============================================================================
  */
 
@@ -27,6 +28,8 @@ var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
 var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
+/** 완료 폴더에 남아 있어도 허브에서는 진행 중으로 취급(되돌리기 이동 권한 없을 때) */
+var VIRTUAL_RESTORED_FILE_IDS_PROP = 'VIRTUAL_RESTORED_FILE_IDS';
 var DISMISSED_FILE_IDS_PROP = 'DISMISSED_FILE_IDS';
 
 /**
@@ -493,6 +496,67 @@ function removeDismissedFileId_(fileId) {
   setDismissedFileIds_(next);
 }
 
+/**
+ * 가상 되돌림 fileId 목록 — Drive 이동 권한이 없어도 완료 폴더에서 진행 중으로 되돌릴 때 사용
+ * @returns {Array<string>}
+ */
+function getVirtualRestoredFileIds_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(VIRTUAL_RESTORED_FILE_IDS_PROP);
+  if (!raw) return [];
+  try {
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var v = parsed[i];
+      if (typeof v !== 'string') continue;
+      var id = v.trim();
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+function setVirtualRestoredFileIds_(ids) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var v = ids[i];
+    if (typeof v !== 'string') continue;
+    var id = v.trim();
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    out.push(id);
+  }
+  PropertiesService.getScriptProperties().setProperty(
+    VIRTUAL_RESTORED_FILE_IDS_PROP,
+    JSON.stringify(out)
+  );
+}
+
+function addVirtualRestoredFileId_(fileId) {
+  var ids = getVirtualRestoredFileIds_();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] === fileId) return;
+  }
+  ids.push(fileId);
+  setVirtualRestoredFileIds_(ids);
+}
+
+function removeVirtualRestoredFileId_(fileId) {
+  var ids = getVirtualRestoredFileIds_();
+  var next = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] !== fileId) next.push(ids[i]);
+  }
+  setVirtualRestoredFileIds_(next);
+}
+
 function buildIdMap_(ids) {
   var map = {};
   for (var i = 0; i < ids.length; i++) {
@@ -665,11 +729,23 @@ function listVirtualCompletedSheets_() {
  * 메인 목록 — Drive API v3 도메인 검색
  * corpora: 'domain' 으로 소유자가 열지 않아도 조직 공유 파일이 모두 검색됨
  */
+/**
+ * 진행 중 목록에 넣을지 — 완료 폴더/가상 완료면 제외, 단 가상 되돌림이면 포함
+ */
+function shouldListAsActive_(f, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap) {
+  if (!driveObjPassesListRules_(f)) return false;
+  if (dismissedMap[f.id]) return false;
+  if (virtualDoneMap[f.id] && !virtualRestoredMap[f.id]) return false;
+  if (driveObjIsInFolder_(f, doneId) && !virtualRestoredMap[f.id]) return false;
+  return true;
+}
+
 function listWasokSheets() {
   try {
     var doneId = getCompletedFolderId_();
     var virtualDoneIds = getVirtualCompletedFileIds_();
     var virtualDoneMap = buildIdMap_(virtualDoneIds);
+    var virtualRestoredMap = buildIdMap_(getVirtualRestoredFileIds_());
     var dismissedMap = buildIdMap_(getDismissedFileIds_());
     // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
@@ -677,12 +753,7 @@ function listWasokSheets() {
     var byId = {};
     for (var i = 0; i < allFiles.length; i++) {
       var f = allFiles[i];
-      if (
-        driveObjPassesListRules_(f) &&
-        !driveObjIsInFolder_(f, doneId) &&
-        !virtualDoneMap[f.id] &&
-        !dismissedMap[f.id]
-      ) {
+      if (shouldListAsActive_(f, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap)) {
         byId[f.id] = driveObjToItem_(f);
       }
     }
@@ -694,14 +765,22 @@ function listWasokSheets() {
       }
       try {
         var rf = getDriveFileById_(rid);
-        if (
-          driveObjPassesListRules_(rf) &&
-          !driveObjIsInFolder_(rf, doneId) &&
-          !virtualDoneMap[rid]
-        ) {
+        if (shouldListAsActive_(rf, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap)) {
           byId[rid] = driveObjToItem_(rf);
         }
       } catch (ignore) {}
+    }
+    // 가상 되돌림인데 검색/등록에 안 잡힌 경우 Drive에서 단건으로 보강
+    var virtualRestoredIds = getVirtualRestoredFileIds_();
+    for (var vr = 0; vr < virtualRestoredIds.length; vr++) {
+      var vrid = virtualRestoredIds[vr];
+      if (byId[vrid] || dismissedMap[vrid]) continue;
+      try {
+        var vrf = getDriveFileById_(vrid);
+        if (driveObjPassesListRules_(vrf)) {
+          byId[vrid] = driveObjToItem_(vrf);
+        }
+      } catch (ignore2) {}
     }
     var passed = [];
     for (var id in byId) {
@@ -717,14 +796,16 @@ function listWasokSheets() {
     var completedById = {};
     var physicalCompleted = listCompletedFolderSheets_();
     for (var pc = 0; pc < physicalCompleted.length; pc++) {
-      if (!dismissedMap[physicalCompleted[pc].id]) {
-        completedById[physicalCompleted[pc].id] = physicalCompleted[pc];
+      var pcItem = physicalCompleted[pc];
+      if (!dismissedMap[pcItem.id] && !virtualRestoredMap[pcItem.id]) {
+        completedById[pcItem.id] = pcItem;
       }
     }
     var virtualCompleted = listVirtualCompletedSheets_();
     for (var vc = 0; vc < virtualCompleted.length; vc++) {
-      if (!dismissedMap[virtualCompleted[vc].id]) {
-        completedById[virtualCompleted[vc].id] = virtualCompleted[vc];
+      var vcItem = virtualCompleted[vc];
+      if (!dismissedMap[vcItem.id] && !virtualRestoredMap[vcItem.id]) {
+        completedById[vcItem.id] = vcItem;
       }
     }
     var completedItems = [];
@@ -780,12 +861,14 @@ function moveFileToCompleted(fileId) {
     if (!gate.ok) return { ok: false, error: gate.error };
     moveDriveFileToFolder_(file, folderId);
     removeVirtualCompletedFileId_(fileId);
+    removeVirtualRestoredFileId_(fileId);
     removeDismissedFileId_(fileId);
     return { ok: true, message: '완료 폴더로 이동했습니다.', id: fileId };
   } catch (e) {
     var msg = String(e && e.message ? e.message : e);
     if (msg.indexOf('sufficient permissions') !== -1) {
       addVirtualCompletedFileId_(fileId);
+      removeVirtualRestoredFileId_(fileId);
       removeDismissedFileId_(fileId);
       return {
         ok: true,
@@ -846,16 +929,36 @@ function restoreFileFromCompleted(fileId) {
       var gate = assertDriveObjRestoreAllowed_(file);
       if (!gate.ok) return { ok: false, error: gate.error };
     }
-    var dest = getRestoreTargetFolder_();
     if (inVirtual) {
       removeVirtualCompletedFileId_(fileId);
+      removeVirtualRestoredFileId_(fileId);
       removeDismissedFileId_(fileId);
       return { ok: true, message: '가상 완료에서 되돌렸습니다.', id: fileId, moved: false };
     }
-    moveDriveFileToFolder_(file, dest.getId());
-    removeVirtualCompletedFileId_(fileId);
-    removeDismissedFileId_(fileId);
-    return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId, moved: true };
+    try {
+      var dest = getRestoreTargetFolder_();
+      moveDriveFileToFolder_(file, dest.getId());
+      removeVirtualCompletedFileId_(fileId);
+      removeVirtualRestoredFileId_(fileId);
+      removeDismissedFileId_(fileId);
+      return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId, moved: true };
+    } catch (moveErr) {
+      var moveMsg = String(moveErr && moveErr.message ? moveErr.message : moveErr);
+      // 완료 처리와 동일: 폴더 이동 권한이 없으면 허브 목록만 되돌림
+      if (moveMsg.indexOf('sufficient permissions') !== -1) {
+        removeVirtualCompletedFileId_(fileId);
+        addVirtualRestoredFileId_(fileId);
+        removeDismissedFileId_(fileId);
+        return {
+          ok: true,
+          id: fileId,
+          message: '이동 권한이 없어 허브 목록만 되돌렸습니다. (드라이브 파일은 완료 폴더에 남을 수 있습니다.)',
+          moved: false,
+          virtualRestored: true,
+        };
+      }
+      return { ok: false, error: moveMsg };
+    }
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }

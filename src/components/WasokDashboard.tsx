@@ -452,13 +452,21 @@ export function WasokDashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId: item.id }),
         });
-        const data = (await res.json()) as { ok?: boolean; error?: string };
+        const data = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          message?: string;
+          moved?: boolean;
+        };
 
         if (!res.ok || data.ok === false) {
           throw new Error(data.error || `HTTP ${res.status}`);
         }
 
-        toast.success("완료 폴더에서 꺼냈습니다.", { description: item.name });
+        toast.success(
+          data.message || "완료 폴더에서 꺼냈습니다.",
+          { description: item.name }
+        );
         writeSheetCache(optimisticMain, optimisticCollect, withoutDone);
       } catch (e) {
         setItems(prevMain);
