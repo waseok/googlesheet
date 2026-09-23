@@ -138,20 +138,20 @@ function sortByManualOrderItems(items: SheetItem[], order: string[]): SheetItem[
 }
 
 /**
- * 구글 시트·설문(폼) URL 또는 raw fileId 입력에서 fileId를 추출합니다.
- * 허용 예:
- * - https://docs.google.com/spreadsheets/d/<fileId>/edit...
- * - https://docs.google.com/forms/d/<fileId>/edit...  (/d/e/ 응답 URL은 불가)
- * - <fileId>
+ * 구글 시트·설문 URL 또는 fileId / forms.gle 단축 링크 입력값을 받습니다.
+ * forms.gle·응답 URL은 GAS에서 FormApp으로 Drive fileId를 해석합니다.
  */
-function extractFileId(raw: string): string {
+function extractRegisterInput(raw: string): string {
   const text = raw.trim();
   if (!text) return "";
   const sheet = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   if (sheet?.[1]) return sheet[1];
-  // /forms/d/e/... 는 Drive fileId가 아님
   const form = text.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
   if (form?.[1]) return form[1];
+  // forms.gle 단축 링크 또는 /forms/d/e/ 응답 URL → GAS에서 해석
+  if (/forms\.gle\/[A-Za-z0-9_-]+/i.test(text)) return text;
+  if (/docs\.google\.com\/forms\//i.test(text)) return text;
+  if (/^https?:\/\//i.test(text) && /forms\.google/i.test(text)) return text;
   return /^[a-zA-Z0-9-_]{20,}$/.test(text) ? text : "";
 }
 
@@ -535,9 +535,11 @@ export function WasokDashboard() {
   );
 
   const handleRegister = React.useCallback(async () => {
-    const fileId = extractFileId(registerInput);
+    const fileId = extractRegisterInput(registerInput);
     if (!fileId) {
-      toast.error("올바른 시트·설문 URL 또는 fileId를 입력해주세요. (폼은 /forms/d/파일ID/edit)");
+      toast.error(
+        "올바른 시트·설문 URL 또는 fileId를 입력해주세요. (forms.gle 단축 링크도 가능)"
+      );
       return;
     }
 
@@ -559,16 +561,16 @@ export function WasokDashboard() {
       }
 
       if (data.alreadyRegistered) {
-        toast.success("이미 등록된 시트입니다.");
+        toast.success("이미 등록된 항목입니다.");
       } else {
-        toast.success("시트를 등록했습니다. 목록을 새로 불러옵니다.");
+        toast.success("등록했습니다. 목록을 새로 불러옵니다.");
       }
 
       setRegisterInput("");
       await loadSheets({ force: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toast.error("시트 등록에 실패했습니다.", { description: msg });
+      toast.error("등록에 실패했습니다.", { description: msg });
     } finally {
       setRegistering(false);
     }
@@ -639,7 +641,7 @@ export function WasokDashboard() {
               <Input
                 value={registerInput}
                 onChange={(e) => setRegisterInput(e.target.value)}
-                placeholder="시트·설문(폼) URL 또는 fileId (폼은 /forms/d/파일ID/edit)"
+                placeholder="시트·설문 URL / forms.gle / fileId"
                 aria-label="시트 또는 설문 URL 또는 fileId 수동 등록"
                 disabled={registering}
               />

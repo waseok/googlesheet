@@ -4,7 +4,7 @@
  * ============================================================================
  * 목록 규칙:
  *   - 자동 검색: 제목에 "[와석초]" 포함 스프레드시트만
- *   - 수동 등록: 구글 시트·설문(폼), 제목 무관 (MIME만 확인)
+ *   - 수동 등록: 구글 시트·설문(폼), 제목 무관 / forms.gle·응답 URL도 FormApp으로 해석
  *   - 제목에 "취합"이 있으면 collectItems 로
  *   - 그 외 중 제목에 "정보"가 있으면 items 로
  *   - 수동 등록·폼은 "정보"·"취합"이 없어도 정보 구역에 표시
@@ -605,15 +605,96 @@ function buildIdMap_(ids) {
 }
 
 /**
+ * URL·단축링크·fileId → Drive fileId
+ * forms.gle /forms/d/e/ 는 FormApp.openByUrl 로 해석합니다.
+ * @param {string} raw
+ * @returns {{ ok: boolean, id?: string, error?: string }}
+ */
+function resolveFileIdFromInput_(raw) {
+  var text = String(raw || '').trim();
+  if (!text) {
+    return { ok: false, error: 'URL 또는 fileId 가 필요합니다.' };
+  }
+
+  // 순수 fileId
+  if (/^[a-zA-Z0-9-_]{20,}$/.test(text) && text.indexOf('/') === -1) {
+    return { ok: true, id: text };
+  }
+
+  var sheet = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (sheet && sheet[1]) {
+    return { ok: true, id: sheet[1] };
+  }
+
+  var formEdit = text.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+  if (formEdit && formEdit[1]) {
+    return { ok: true, id: formEdit[1] };
+  }
+
+  var url = text;
+  if (url.indexOf('http') !== 0) {
+    if (/^forms\.gle\//i.test(url)) {
+      url = 'https://' + url;
+    } else if (/^docs\.google\.com\//i.test(url)) {
+      url = 'https://' + url;
+    }
+  }
+
+  // forms.gle 단축 링크 → Location 헤더로 실제 URL 확보
+  if (/forms\.gle\//i.test(url)) {
+    try {
+      var resp = UrlFetchApp.fetch(url, {
+        followRedirects: false,
+        muteHttpExceptions: true,
+      });
+      var headers = resp.getHeaders();
+      var loc = headers.Location || headers.location || '';
+      if (loc) {
+        url = loc;
+        var formEdit2 = url.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+        if (formEdit2 && formEdit2[1]) {
+          return { ok: true, id: formEdit2[1] };
+        }
+      }
+    } catch (ignoreRedirect) {}
+  }
+
+  // 설문 편집·응답 URL → FormApp (실행 계정에 접근 권한 필요)
+  if (/docs\.google\.com\/forms\//i.test(url) || /forms\.gle\//i.test(text)) {
+    try {
+      var form = FormApp.openByUrl(url);
+      return { ok: true, id: form.getId() };
+    } catch (formErr) {
+      return {
+        ok: false,
+        error:
+          '설문 단축/응답 URL을 해석하지 못했습니다. GAS 실행 계정에 해당 폼 접근 권한이 있는지 확인하거나, 폼 편집 URL(/forms/d/파일ID/edit)을 사용하세요.',
+      };
+    }
+  }
+
+  try {
+    var ss = SpreadsheetApp.openByUrl(url);
+    return { ok: true, id: ss.getId() };
+  } catch (sheetErr) {}
+
+  return {
+    ok: false,
+    error: '올바른 시트·설문 URL 또는 fileId가 아닙니다. forms.gle 단축 링크도 등록할 수 있습니다.',
+  };
+}
+
+/**
  * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
- * - 권한 확인: Drive 단건 조회 성공 필요
+ * - fileId 또는 시트/설문 URL(forms.gle 포함) 입력 가능
  * - 구글 시트 또는 설문(폼)이면 제목 무관 등록 가능
  */
 function registerSheetById_(fileId) {
-  var id = fileId ? String(fileId).trim() : '';
-  if (!id) {
-    return { ok: false, error: 'fileId 가 필요합니다.' };
+  var resolved = resolveFileIdFromInput_(fileId);
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error };
   }
+  var id = resolved.id;
   try {
     var file = getDriveFileById_(id);
     var gate = assertDriveObjAllowedForRegister_(file);
@@ -642,7 +723,8 @@ function registerSheetById_(fileId) {
   } catch (e) {
     return {
       ok: false,
-      error: '해당 파일에 접근할 수 없습니다. 공유 권한 또는 fileId 를 확인하세요. (설문은 /forms/d/파일ID/edit URL을 사용하세요. /d/e/ 주소는 불가)',
+      error:
+        '해당 파일에 접근할 수 없습니다. 공유 권한 또는 URL을 확인하세요. (설문 forms.gle 은 GAS 실행 계정이 폼을 열 수 있어야 합니다.)',
     };
   }
 }
