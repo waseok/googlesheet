@@ -11,6 +11,7 @@ const badgeVariants = cva(
         info: "border-sky-200/80 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100",
         collect:
           "border-emerald-200/80 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100",
+        form: "border-orange-200/80 bg-orange-50 text-orange-900 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-100",
         muted:
           "border-border/70 bg-muted/60 text-muted-foreground",
       },

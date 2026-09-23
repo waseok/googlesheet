@@ -137,11 +137,21 @@ function sortByManualOrderItems(items: SheetItem[], order: string[]): SheetItem[
   });
 }
 
+/**
+ * 구글 시트·설문(폼) URL 또는 raw fileId 입력에서 fileId를 추출합니다.
+ * 허용 예:
+ * - https://docs.google.com/spreadsheets/d/<fileId>/edit...
+ * - https://docs.google.com/forms/d/<fileId>/edit...  (/d/e/ 응답 URL은 불가)
+ * - <fileId>
+ */
 function extractFileId(raw: string): string {
   const text = raw.trim();
   if (!text) return "";
-  const m = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  if (m && m[1]) return m[1];
+  const sheet = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (sheet?.[1]) return sheet[1];
+  // /forms/d/e/... 는 Drive fileId가 아님
+  const form = text.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+  if (form?.[1]) return form[1];
   return /^[a-zA-Z0-9-_]{20,}$/.test(text) ? text : "";
 }
 
@@ -527,7 +537,7 @@ export function WasokDashboard() {
   const handleRegister = React.useCallback(async () => {
     const fileId = extractFileId(registerInput);
     if (!fileId) {
-      toast.error("올바른 시트 URL 또는 fileId를 입력해주세요.");
+      toast.error("올바른 시트·설문 URL 또는 fileId를 입력해주세요. (폼은 /forms/d/파일ID/edit)");
       return;
     }
 
@@ -629,8 +639,8 @@ export function WasokDashboard() {
               <Input
                 value={registerInput}
                 onChange={(e) => setRegisterInput(e.target.value)}
-                placeholder="시트 URL 또는 fileId를 입력해 수동 등록"
-                aria-label="시트 URL 또는 fileId 수동 등록"
+                placeholder="시트·설문(폼) URL 또는 fileId (폼은 /forms/d/파일ID/edit)"
+                aria-label="시트 또는 설문 URL 또는 fileId 수동 등록"
                 disabled={registering}
               />
               <Button
@@ -640,7 +650,7 @@ export function WasokDashboard() {
                 onClick={() => void handleRegister()}
                 className="sm:w-auto"
               >
-                {registering ? "등록 중…" : "시트 등록"}
+                {registering ? "등록 중…" : "등록"}
               </Button>
             </div>
           </div>

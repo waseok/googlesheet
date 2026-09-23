@@ -111,11 +111,12 @@ export function SheetBoardRow({
           : "bg-background hover:bg-slate-50/80 dark:hover:bg-slate-900/40"
       )}
     >
-      <div className="grid grid-cols-1 gap-2 px-3 py-2.5 sm:grid-cols-[4.5rem_minmax(0,1fr)_minmax(0,7rem)_5.5rem_auto] sm:items-center sm:gap-3 sm:px-4">
-        <div className="flex items-center gap-2 sm:block">
+      <div className="grid grid-cols-1 gap-2 px-3 py-2.5 sm:grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,7rem)_5.5rem_auto] sm:items-center sm:gap-3 sm:px-4">
+        <div className="flex flex-wrap items-center gap-1">
           <Badge variant={segment === "collect" ? "collect" : "info"}>
             {segment === "collect" ? "취합" : "정보"}
           </Badge>
+          {item.kind === "form" ? <Badge variant="form">설문</Badge> : null}
         </div>
 
         <div className="min-w-0">

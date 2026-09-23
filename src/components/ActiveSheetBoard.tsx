@@ -41,7 +41,7 @@ export function ActiveSheetBoard({
   return (
     <div className="overflow-hidden">
       <div
-        className="text-muted-foreground border-border/60 hidden border-b bg-slate-50/90 px-4 py-2 text-[11px] font-semibold tracking-wide uppercase sm:grid sm:grid-cols-[4.5rem_minmax(0,1fr)_minmax(0,7rem)_5.5rem_auto] sm:gap-3 dark:bg-slate-900/50"
+        className="text-muted-foreground border-border/60 hidden border-b bg-slate-50/90 px-4 py-2 text-[11px] font-semibold tracking-wide uppercase sm:grid sm:grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,7rem)_5.5rem_auto] sm:gap-3 dark:bg-slate-900/50"
         aria-hidden
       >
         <span>유형</span>

@@ -3,10 +3,12 @@
  * 와석초 구글 시트 통합 관리 대시보드 (Wasok Sheet Hub) - Google Apps Script
  * ============================================================================
  * 목록 규칙:
- *   - 제목에 "[와석초]" 가 포함된 스프레드시트만 (생성 연도 무관)
+ *   - 자동 검색: 제목에 "[와석초]" 포함 스프레드시트만
+ *   - 수동 등록: 구글 시트·설문(폼), 제목 무관 (MIME만 확인)
  *   - 제목에 "취합"이 있으면 collectItems 로
- *   - 그 외 중 제목에 "정보"가 있으면 items(정보 시트 구역)로. 둘 다 없으면 표시하지 않음
- *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 시트 목록 (하단 구역 표시용)
+ *   - 그 외 중 제목에 "정보"가 있으면 items 로
+ *   - 수동 등록·폼은 "정보"·"취합"이 없어도 정보 구역에 표시
+ *   - completedItems: 완료 폴더 직속·허브 규칙에 맞는 목록 (하단 구역 표시용)
  *
  * [중요] Drive 고급 서비스 활성화 필요:
  *   GAS 편집기 좌측 → 서비스(+) → "Drive API" 추가
@@ -26,6 +28,7 @@ var REQUIRED_TITLE_MARK = '[와석초]';
 var COLLECT_MARK = '취합';
 var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+var FORM_MIME = 'application/vnd.google-apps.form';
 var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
 var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
 /** 완료 폴더에 남아 있어도 허브에서는 진행 중으로 취급(되돌리기 이동 권한 없을 때) */
@@ -103,15 +106,17 @@ function fileIsInFolder_(file, folderId) {
 function assertRestoreAllowed_(file) {
   var completedId = getCompletedFolderId_();
   if (!completedId) return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
-  if (!fileIsInFolder_(file, completedId)) return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
-  if (file.getMimeType() !== SPREADSHEET_MIME) return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
-  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
+  if (!fileIsInFolder_(file, completedId)) return { ok: false, error: '완료 폴더에 있는 항목만 되돌릴 수 있습니다.' };
+  if (!isHubMime_(file.getMimeType())) return { ok: false, error: '구글 시트 또는 설문(폼)만 되돌릴 수 있습니다.' };
   return { ok: true };
 }
 
 function assertFileAllowedForHub_(file) {
-  if (file.getMimeType() !== SPREADSHEET_MIME) return { ok: false, error: '스프레드시트가 아닙니다.' };
-  if (file.getName().indexOf(REQUIRED_TITLE_MARK) === -1) return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
+  if (!isHubMime_(file.getMimeType())) return { ok: false, error: '구글 시트 또는 설문(폼)이 아닙니다.' };
+  var name = file.getName() || '';
+  if (name.indexOf(REQUIRED_TITLE_MARK) === -1 && !isRegisteredFileId_(file.getId())) {
+    return { ok: false, error: '제목에 [와석초]가 있거나, 수동 등록된 항목만 완료 처리할 수 있습니다.' };
+  }
   return { ok: true };
 }
 
@@ -122,8 +127,7 @@ function assertFileAllowedForDescription_(file) {
   if (
     folderId &&
     fileIsInFolder_(file, folderId) &&
-    file.getMimeType() === SPREADSHEET_MIME &&
-    file.getName().indexOf(REQUIRED_TITLE_MARK) !== -1
+    isHubMime_(file.getMimeType())
   ) {
     return { ok: true };
   }
@@ -132,13 +136,45 @@ function assertFileAllowedForDescription_(file) {
 
 // ── Drive API v3 객체용 헬퍼 (목록 검색에서 사용) ───────────────────────────
 
+/** 허브에 올릴 수 있는 Drive MIME (시트·설문) */
+function isHubMime_(mime) {
+  return mime === SPREADSHEET_MIME || mime === FORM_MIME;
+}
+
+function hubKindFromMime_(mime) {
+  return mime === FORM_MIME ? 'form' : 'sheet';
+}
+
 /**
- * Drive API v3 file 객체가 허브 목록 규칙을 통과하는지 확인
+ * 자동 검색용: 시트/폼 MIME + 제목 [와석초]
  */
 function driveObjPassesListRules_(f) {
-  if (f.mimeType !== SPREADSHEET_MIME) return false;
+  if (!isHubMime_(f.mimeType)) return false;
   if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) return false;
   return true;
+}
+
+/** 수동 등록용: MIME만 (제목 무관) */
+function driveObjPassesRegisterRules_(f) {
+  return !!(f && isHubMime_(f.mimeType));
+}
+
+function isRegisteredFileId_(fileId) {
+  if (!fileId) return false;
+  var ids = getRegisteredFileIds_();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] === fileId) return true;
+  }
+  return false;
+}
+
+/**
+ * 완료 폴더·목록에 남을 수 있는지 — 자동 규칙 또는 수동 등록
+ */
+function driveObjPassesCompletedListRules_(f) {
+  if (!f || !isHubMime_(f.mimeType)) return false;
+  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) !== -1) return true;
+  return isRegisteredFileId_(f.id);
 }
 
 /**
@@ -177,6 +213,8 @@ function driveObjToItem_(f) {
     description: f.description || '',
     lastUpdated: f.modifiedTime,
     createdTime: f.createdTime,
+    kind: hubKindFromMime_(f.mimeType),
+    mimeType: f.mimeType || '',
   };
 }
 
@@ -194,24 +232,28 @@ function getDriveFileById_(fileId, fields) {
 }
 
 /**
- * 허브 규칙 검증(Drive API v3 file 객체 기준)
- * @param {Object} f
- * @returns {{ ok: boolean, error?: string }}
+ * 완료·설명 등 허브 작업 — 자동([와석초]) 또는 수동 등록 항목
  */
 function assertDriveObjAllowedForHub_(f) {
-  if (!f || f.mimeType !== SPREADSHEET_MIME) {
-    return { ok: false, error: '스프레드시트가 아닙니다.' };
+  if (!f || !isHubMime_(f.mimeType)) {
+    return { ok: false, error: '구글 시트 또는 설문(폼)이 아닙니다.' };
   }
-  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
-    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 완료 처리할 수 있습니다.' };
+  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1 && !isRegisteredFileId_(f.id)) {
+    return { ok: false, error: '제목에 [와석초]가 있거나, 수동 등록된 항목만 처리할 수 있습니다.' };
+  }
+  return { ok: true };
+}
+
+/** 수동 등록 — 제목 무관, 시트·폼 MIME만 */
+function assertDriveObjAllowedForRegister_(f) {
+  if (!driveObjPassesRegisterRules_(f)) {
+    return { ok: false, error: '구글 시트 또는 설문(폼)만 등록할 수 있습니다.' };
   }
   return { ok: true };
 }
 
 /**
- * 완료 폴더에 있는 [와석초] 스프레드시트만 복원 허용
- * @param {Object} f
- * @returns {{ ok: boolean, error?: string }}
+ * 완료 폴더에 있는 시트·폼만 복원 허용 (제목 무관 — 수동 등록분 포함)
  */
 function assertDriveObjRestoreAllowed_(f) {
   var completedId = getCompletedFolderId_();
@@ -219,13 +261,10 @@ function assertDriveObjRestoreAllowed_(f) {
     return { ok: false, error: 'COMPLETED_FOLDER_ID 가 설정되어 있어야 합니다.' };
   }
   if (!driveObjIsInFolder_(f, completedId)) {
-    return { ok: false, error: '완료 폴더에 있는 시트만 되돌릴 수 있습니다.' };
+    return { ok: false, error: '완료 폴더에 있는 항목만 되돌릴 수 있습니다.' };
   }
-  if (!f || f.mimeType !== SPREADSHEET_MIME) {
-    return { ok: false, error: '스프레드시트만 되돌릴 수 있습니다.' };
-  }
-  if ((f.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
-    return { ok: false, error: '제목에 [와석초]가 포함된 시트만 되돌릴 수 있습니다.' };
+  if (!f || !isHubMime_(f.mimeType)) {
+    return { ok: false, error: '구글 시트 또는 설문(폼)만 되돌릴 수 있습니다.' };
   }
   return { ok: true };
 }
@@ -567,10 +606,8 @@ function buildIdMap_(ids) {
 
 /**
  * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
- * - 권한 확인: DriveApp.getFileById 성공 필요
- * - 허브 규칙([와석초], 시트 MIME) 통과 필요
- * @param {string} fileId
- * @returns {{ ok: boolean, id?: string, item?: Object, alreadyRegistered?: boolean, error?: string }}
+ * - 권한 확인: Drive 단건 조회 성공 필요
+ * - 구글 시트 또는 설문(폼)이면 제목 무관 등록 가능
  */
 function registerSheetById_(fileId) {
   var id = fileId ? String(fileId).trim() : '';
@@ -579,7 +616,7 @@ function registerSheetById_(fileId) {
   }
   try {
     var file = getDriveFileById_(id);
-    var gate = assertDriveObjAllowedForHub_(file);
+    var gate = assertDriveObjAllowedForRegister_(file);
     if (!gate.ok) {
       return { ok: false, error: gate.error };
     }
@@ -605,7 +642,7 @@ function registerSheetById_(fileId) {
   } catch (e) {
     return {
       ok: false,
-      error: '해당 시트에 접근할 수 없습니다. 공유 권한 또는 fileId 를 확인하세요.',
+      error: '해당 파일에 접근할 수 없습니다. 공유 권한 또는 fileId 를 확인하세요. (설문은 /forms/d/파일ID/edit URL을 사용하세요. /d/e/ 주소는 불가)',
     };
   }
 }
@@ -661,26 +698,32 @@ function fileToItem_(file) {
     description: desc,
     lastUpdated: file.getLastUpdated().toISOString(),
     createdTime: file.getDateCreated().toISOString(),
+    kind: hubKindFromMime_(file.getMimeType()),
+    mimeType: file.getMimeType() || '',
   };
 }
 
 /**
  * 제목 키워드로 구역 분리 — 취합 우선, 다음 정보
- * @param {Array<Object>} rows name 필드 기준
- * @returns {{ items: Array<Object>, collectItems: Array<Object> }}
+ * 수동 등록·폼은 정보·취합 키워드가 없어도 정보 구역에 넣습니다.
+ * @param {Array<Object>} rows
+ * @param {Object=} registeredMap fileId → true
  */
-function partitionByTitleMarks_(rows) {
+function partitionByTitleMarks_(rows, registeredMap) {
+  var reg = registeredMap || {};
   var infoItems = [], collect = [];
   for (var i = 0; i < rows.length; i++) {
-    var n = rows[i].name;
-    if (n.indexOf(COLLECT_MARK) !== -1) collect.push(rows[i]);
-    else if (n.indexOf(INFO_MARK) !== -1) infoItems.push(rows[i]);
+    var row = rows[i];
+    var n = row.name || '';
+    if (n.indexOf(COLLECT_MARK) !== -1) collect.push(row);
+    else if (n.indexOf(INFO_MARK) !== -1) infoItems.push(row);
+    else if (row.kind === 'form' || reg[row.id]) infoItems.push(row);
   }
   return { items: infoItems, collectItems: collect };
 }
 
 /**
- * 완료 폴더 직속 파일 중 허브 규칙에 맞는 스프레드시트
+ * 완료 폴더 직속 파일 중 허브 규칙에 맞는 시트·폼
  * Drive API v3 로 검색하므로 공유드라이브 완료 폴더도 지원
  */
 function listCompletedFolderSheets_() {
@@ -688,7 +731,7 @@ function listCompletedFolderSheets_() {
   if (!folderId) return [];
   try {
     var params = {
-      q: "'" + folderId + "' in parents and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false",
+      q: "'" + folderId + "' in parents and (mimeType = '" + SPREADSHEET_MIME + "' or mimeType = '" + FORM_MIME + "') and trashed = false",
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
       fields: 'nextPageToken, files(id, name, webViewLink, owners, description, modifiedTime, createdTime, mimeType, parents)',
@@ -698,7 +741,7 @@ function listCompletedFolderSheets_() {
     var files = resp.files || [];
     var rows = [];
     for (var i = 0; i < files.length; i++) {
-      if (driveObjPassesListRules_(files[i])) rows.push(driveObjToItem_(files[i]));
+      if (driveObjPassesCompletedListRules_(files[i])) rows.push(driveObjToItem_(files[i]));
     }
     return sortItemsByLastUpdatedDesc_(rows);
   } catch (e) {
@@ -717,7 +760,7 @@ function listVirtualCompletedSheets_() {
     var id = ids[i];
     try {
       var f = getDriveFileById_(id);
-      if (driveObjPassesListRules_(f)) {
+      if (driveObjPassesCompletedListRules_(f) || driveObjPassesRegisterRules_(f)) {
         rows.push(driveObjToItem_(f));
       }
     } catch (ignore) {}
@@ -730,10 +773,21 @@ function listVirtualCompletedSheets_() {
  * corpora: 'domain' 으로 소유자가 열지 않아도 조직 공유 파일이 모두 검색됨
  */
 /**
- * 진행 중 목록에 넣을지 — 완료 폴더/가상 완료면 제외, 단 가상 되돌림이면 포함
+ * 진행 중 목록(자동 검색) — [와석초] 규칙 + 완료/숨김 제외
  */
 function shouldListAsActive_(f, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap) {
   if (!driveObjPassesListRules_(f)) return false;
+  if (dismissedMap[f.id]) return false;
+  if (virtualDoneMap[f.id] && !virtualRestoredMap[f.id]) return false;
+  if (driveObjIsInFolder_(f, doneId) && !virtualRestoredMap[f.id]) return false;
+  return true;
+}
+
+/**
+ * 진행 중 목록(수동 등록) — 제목 무관, MIME만
+ */
+function shouldListRegisteredAsActive_(f, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap) {
+  if (!driveObjPassesRegisterRules_(f)) return false;
   if (dismissedMap[f.id]) return false;
   if (virtualDoneMap[f.id] && !virtualRestoredMap[f.id]) return false;
   if (driveObjIsInFolder_(f, doneId) && !virtualRestoredMap[f.id]) return false;
@@ -747,7 +801,9 @@ function listWasokSheets() {
     var virtualDoneMap = buildIdMap_(virtualDoneIds);
     var virtualRestoredMap = buildIdMap_(getVirtualRestoredFileIds_());
     var dismissedMap = buildIdMap_(getDismissedFileIds_());
-    // Drive API v3 쿼리는 'name' 사용 (v2의 'title' 아님)
+    var registeredIds = getRegisteredFileIds_();
+    var registeredMap = buildIdMap_(registeredIds);
+    // 자동 검색: [와석초] 시트만. 설문·제목 없는 항목은 수동 등록.
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
     var allFiles = searchDomainFiles_(query);
     var byId = {};
@@ -757,7 +813,6 @@ function listWasokSheets() {
         byId[f.id] = driveObjToItem_(f);
       }
     }
-    var registeredIds = getRegisteredFileIds_();
     for (var i = 0; i < registeredIds.length; i++) {
       var rid = registeredIds[i];
       if (byId[rid] || dismissedMap[rid]) {
@@ -765,7 +820,7 @@ function listWasokSheets() {
       }
       try {
         var rf = getDriveFileById_(rid);
-        if (shouldListAsActive_(rf, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap)) {
+        if (shouldListRegisteredAsActive_(rf, doneId, virtualDoneMap, virtualRestoredMap, dismissedMap)) {
           byId[rid] = driveObjToItem_(rf);
         }
       } catch (ignore) {}
@@ -777,7 +832,7 @@ function listWasokSheets() {
       if (byId[vrid] || dismissedMap[vrid]) continue;
       try {
         var vrf = getDriveFileById_(vrid);
-        if (driveObjPassesListRules_(vrf)) {
+        if (driveObjPassesRegisterRules_(vrf) || driveObjPassesListRules_(vrf)) {
           byId[vrid] = driveObjToItem_(vrf);
         }
       } catch (ignore2) {}
@@ -790,7 +845,7 @@ function listWasokSheets() {
     }
 
     var sorted = sortItemsByLastUpdatedDesc_(passed);
-    var parts = partitionByTitleMarks_(sorted);
+    var parts = partitionByTitleMarks_(sorted, registeredMap);
     parts.items = sortItemsByLastUpdatedDesc_(parts.items);
     parts.collectItems = sortItemsByLastUpdatedDesc_(parts.collectItems);
     var completedById = {};
@@ -889,8 +944,8 @@ function dismissFromHub_(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
   try {
     var file = getDriveFileById_(fileId, 'id, name, mimeType, parents');
-    if ((file.name || '').indexOf(REQUIRED_TITLE_MARK) === -1) {
-      return { ok: false, error: '제목에 [와석초]가 포함된 시트만 목록에서 삭제할 수 있습니다.' };
+    if ((file.name || '').indexOf(REQUIRED_TITLE_MARK) === -1 && !isRegisteredFileId_(fileId)) {
+      return { ok: false, error: '제목에 [와석초]가 있거나, 수동 등록된 항목만 목록에서 삭제할 수 있습니다.' };
     }
     var folderId = getCompletedFolderId_();
     var inVirtual = false;
@@ -903,7 +958,7 @@ function dismissFromHub_(fileId) {
     }
     var inCompleted = folderId && driveObjIsInFolder_(file, folderId);
     if (!inVirtual && !inCompleted) {
-      return { ok: false, error: '완료 폴더에 있는 시트만 목록에서 삭제할 수 있습니다.' };
+      return { ok: false, error: '완료 폴더에 있는 항목만 목록에서 삭제할 수 있습니다.' };
     }
     removeVirtualCompletedFileId_(fileId);
     addDismissedFileId_(fileId);

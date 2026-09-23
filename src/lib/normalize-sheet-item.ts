@@ -30,6 +30,15 @@ export function normalizeGasSheetItem(raw: unknown): SheetItem | null {
   const description =
     typeof r.description === "string" ? r.description : undefined;
 
+  const kind =
+    r.kind === "form" || r.kind === "sheet"
+      ? r.kind
+      : r.mimeType === "application/vnd.google-apps.form"
+        ? "form"
+        : r.mimeType === "application/vnd.google-apps.spreadsheet"
+          ? "sheet"
+          : undefined;
+
   return {
     id: r.id,
     name: r.name,
@@ -40,5 +49,7 @@ export function normalizeGasSheetItem(raw: unknown): SheetItem | null {
     lastUpdated: typeof r.lastUpdated === "string" ? r.lastUpdated : "",
     createdTime:
       typeof r.createdTime === "string" ? r.createdTime : undefined,
+    kind,
+    mimeType: typeof r.mimeType === "string" ? r.mimeType : undefined,
   };
 }

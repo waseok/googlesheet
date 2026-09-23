@@ -14,6 +14,9 @@ export interface SheetItem {
   lastUpdated: string;
   /** 생성 시각(ISO). GAS에서 getDateCreated 기준 */
   createdTime?: string;
+  /** 시트 | 설문(폼) */
+  kind?: "sheet" | "form";
+  mimeType?: string;
 }
 
 /** GAS `listWasokSheets` 응답 */
