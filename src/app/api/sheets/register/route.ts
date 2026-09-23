@@ -77,6 +77,8 @@ export async function POST(request: Request) {
     id: parsed.id,
     item: item || undefined,
     alreadyRegistered: parsed.alreadyRegistered === true,
+    linkOnly: parsed.linkOnly === true,
+    message: typeof parsed.message === "string" ? parsed.message : undefined,
     error: parsed.error,
   };
 

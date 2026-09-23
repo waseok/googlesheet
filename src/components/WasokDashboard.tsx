@@ -236,7 +236,7 @@ export function WasokDashboard() {
     []
   );
 
-  const loadSheets = React.useCallback(async (opts: { force: boolean }) => {
+  const loadSheets = React.useCallback(async (opts: { force: boolean; background?: boolean }) => {
     const peek = readSheetCacheStaleOk();
 
     if (!opts.force && peek.fromStorage) {
@@ -249,7 +249,9 @@ export function WasokDashboard() {
       }
     }
 
-    const showBlockingSpinner = opts.force || !peek.fromStorage;
+    // 등록 직후 백그라운드 동기화는 스피너로 화면을 가리지 않음
+    const showBlockingSpinner =
+      !opts.background && (opts.force || !peek.fromStorage);
     if (showBlockingSpinner) {
       setLoading(true);
     }
@@ -556,10 +558,34 @@ export function WasokDashboard() {
         error?: string;
         message?: string;
         linkOnly?: boolean;
+        item?: SheetItem;
       };
 
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      // 목록 전체 재조회(Drive 검색)는 느리므로, 응답 item으로 먼저 화면에 반영
+      if (data.item && data.item.id) {
+        const registered = data.item;
+        const isCollect = registered.name.includes("취합");
+        const upsert = (list: SheetItem[]) => {
+          const without = list.filter((x) => x.id !== registered.id);
+          return [registered, ...without];
+        };
+        const nextMain = isCollect
+          ? itemsRef.current.filter((x) => x.id !== registered.id)
+          : upsert(itemsRef.current);
+        const nextCol = isCollect
+          ? upsert(collectRef.current)
+          : collectRef.current.filter((x) => x.id !== registered.id);
+        const nextDone = completedRef.current.filter(
+          (x) => x.id !== registered.id
+        );
+        setItems(nextMain);
+        setCollectItems(nextCol);
+        setCompletedItems(nextDone);
+        writeSheetCache(nextMain, nextCol, nextDone);
       }
 
       if (data.alreadyRegistered) {
@@ -569,12 +595,13 @@ export function WasokDashboard() {
           data.message ||
             (data.linkOnly
               ? "설문 링크를 등록했습니다."
-              : "등록했습니다. 목록을 새로 불러옵니다.")
+              : "등록했습니다.")
         );
       }
 
       setRegisterInput("");
-      await loadSheets({ force: true });
+      // 백그라운드 동기화(스피너로 목록을 가리지 않음)
+      void loadSheets({ force: true, background: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error("등록에 실패했습니다.", { description: msg });

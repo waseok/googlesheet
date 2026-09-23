@@ -59,6 +59,9 @@ export interface GasRegisterResponse {
   id?: string;
   item?: SheetItem;
   alreadyRegistered?: boolean;
+  /** forms.gle 등 Drive fileId 없이 링크만 등록된 경우 */
+  linkOnly?: boolean;
+  message?: string;
   error?: string;
 }
 

@@ -767,11 +767,12 @@ function makeGleLinkId_(url) {
 }
 
 /**
- * 공개 설문 페이지 HTML에서 제목을 가져옵니다.
+ * 공개 설문 페이지를 한 번 fetch 해서 제목·최종 URL을 얻습니다.
  * @param {string} pageUrl
- * @returns {string}
+ * @returns {{ title: string, finalUrl: string }}
  */
-function fetchFormTitleFromUrl_(pageUrl) {
+function fetchFormPageMeta_(pageUrl) {
+  var out = { title: '', finalUrl: pageUrl };
   try {
     var resp = UrlFetchApp.fetch(pageUrl, {
       followRedirects: true,
@@ -782,18 +783,31 @@ function fetchFormTitleFromUrl_(pageUrl) {
         Accept: 'text/html,application/xhtml+xml',
       },
     });
-    if (resp.getResponseCode() >= 400) return '';
+    if (resp.getResponseCode() >= 400) return out;
+    try {
+      out.finalUrl = resp.getHeaders()['X-Final-URL'] || pageUrl;
+    } catch (ignoreHdr) {}
+    // Apps Script 는 최종 URL 헤더가 없을 수 있음 — Location 추적 결과 없으면 pageUrl 유지
     var html = resp.getContentText() || '';
 
-    // Google Forms 공개 데이터 블록
-    var dataTitle = html.match(/FB_PUBLIC_LOAD_DATA_\s*=\s*(\[[\s\S]*?\]);/);
-    if (dataTitle && dataTitle[1]) {
-      try {
-        var data = JSON.parse(dataTitle[1]);
-        // 구조가 버전마다 달라서 문자열 후보를 넓게 탐색
-        var guessed = guessFormTitleFromFbData_(data);
-        if (guessed) return guessed;
-      } catch (ignoreJson) {}
+    var data = extractFbPublicLoadData_(html);
+    if (data) {
+      var guessed = guessFormTitleFromFbData_(data);
+      if (guessed) {
+        out.title = guessed;
+        return out;
+      }
+    }
+
+    var freebird = html.match(
+      /freebirdFormviewerViewHeaderTitle[^>]*>([^<]+)</i
+    );
+    if (freebird && freebird[1]) {
+      var fbTitle = cleanFetchedFormTitle_(freebird[1]);
+      if (fbTitle) {
+        out.title = fbTitle;
+        return out;
+      }
     }
 
     var og = html.match(
@@ -804,12 +818,53 @@ function fetchFormTitleFromUrl_(pageUrl) {
         /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i
       );
     }
-    if (og && og[1]) return cleanFetchedFormTitle_(og[1]);
+    if (og && og[1]) {
+      var ogTitle = cleanFetchedFormTitle_(og[1]);
+      if (ogTitle) {
+        out.title = ogTitle;
+        return out;
+      }
+    }
 
     var title = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-    if (title && title[1]) return cleanFetchedFormTitle_(title[1]);
+    if (title && title[1]) {
+      out.title = cleanFetchedFormTitle_(title[1]) || '';
+    }
   } catch (e) {}
-  return '';
+  return out;
+}
+
+/**
+ * 공개 설문 페이지 HTML에서 제목을 가져옵니다.
+ * @param {string} pageUrl
+ * @returns {string}
+ */
+function fetchFormTitleFromUrl_(pageUrl) {
+  return fetchFormPageMeta_(pageUrl).title;
+}
+
+/**
+ * HTML 안에서 FB_PUBLIC_LOAD_DATA_ JSON 배열을 통째로 파싱합니다.
+ * @param {string} html
+ * @returns {*|null}
+ */
+function extractFbPublicLoadData_(html) {
+  var marker = 'FB_PUBLIC_LOAD_DATA_';
+  var idx = html.indexOf(marker);
+  if (idx < 0) return null;
+  var bracket = html.indexOf('[', idx);
+  if (bracket < 0) return null;
+  var scriptEnd = html.indexOf('</script>', bracket);
+  if (scriptEnd < 0) scriptEnd = Math.min(bracket + 500000, html.length);
+  var chunk = html.substring(bracket, scriptEnd).replace(/;\s*$/, '').trim();
+  // 끝의 잡음 제거
+  var lastBracket = chunk.lastIndexOf(']');
+  if (lastBracket > 0) chunk = chunk.substring(0, lastBracket + 1);
+  try {
+    return JSON.parse(chunk);
+  } catch (e) {
+    return null;
+  }
 }
 
 function cleanFetchedFormTitle_(raw) {
@@ -819,96 +874,58 @@ function cleanFetchedFormTitle_(raw) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
     .replace(/\s+/g, ' ')
     .trim();
   t = t.replace(/\s*[-–|]\s*Google\s*Forms?\s*$/i, '').trim();
   t = t.replace(/\s*[-–|]\s*Google\s*설문지?\s*$/i, '').trim();
-  if (!t || /^google\s*forms?$/i.test(t) || t === '설문지') return '';
+  if (!t || /^google\s*forms?$/i.test(t) || t === '설문지' || t === 'Google Forms') {
+    return '';
+  }
   if (t.length > 120) t = t.substring(0, 120);
   return t;
 }
 
 /**
  * FB_PUBLIC_LOAD_DATA_ 배열에서 폼 제목 후보를 찾습니다.
+ * 알려진 위치: data[1][8] = title, data[1][0] = description
  * @param {*} data
  * @returns {string}
  */
 function guessFormTitleFromFbData_(data) {
-  if (!data) return '';
-  // 흔한 위치: data[1][8] 또는 data[1][1] 등 — 안전하게 BFS
-  var queue = [data];
-  var seen = 0;
-  while (queue.length && seen < 80) {
-    var cur = queue.shift();
-    seen++;
-    if (typeof cur === 'string') {
-      var s = cur.trim();
-      if (
-        s.length >= 2 &&
-        s.length <= 120 &&
-        s.indexOf('http') !== 0 &&
-        s.indexOf('{') !== 0 &&
-        !/^[\d.]+$/.test(s) &&
-        s.indexOf('docs.google') === -1
-      ) {
-        // 너무 일반적인 메타 문자열 제외
-        if (
-          !/^(true|false|null|form|forms|google)$/i.test(s) &&
-          /[가-힣A-Za-z]/.test(s)
-        ) {
-          // 첫 의미 있는 한글/영문 문자열 중 길이가 적당한 것을 선호하기 위해
-          // 상위 레벨에서 찾은 긴 문자열을 반환하도록 아래에서 재탐색
-        }
-      }
-      continue;
-    }
-    if (Object.prototype.toString.call(cur) === '[object Array]') {
-      for (var i = 0; i < cur.length; i++) queue.push(cur[i]);
-    }
-  }
+  if (!data || !data[1]) return '';
 
-  // 알려진 패턴 우선: [1][8], [1][0], [1][1]
   try {
-    if (data[1] && typeof data[1][8] === 'string' && data[1][8].trim()) {
-      return cleanFetchedFormTitle_(data[1][8]);
+    if (typeof data[1][8] === 'string' && data[1][8].trim()) {
+      var t8 = cleanFetchedFormTitle_(data[1][8]);
+      if (t8) return t8;
     }
   } catch (e1) {}
+
+  // 루트 근처 문자열 후보(구버전 레이아웃)
   try {
-    if (data[1] && typeof data[1][0] === 'string' && data[1][0].trim()) {
-      return cleanFetchedFormTitle_(data[1][0]);
+    for (var ri = 0; ri < Math.min(data.length, 20); ri++) {
+      if (typeof data[ri] === 'string') {
+        var rt = cleanFetchedFormTitle_(data[ri]);
+        if (rt && rt.length >= 2 && rt.indexOf('/forms') !== 0) return rt;
+      }
     }
   } catch (e2) {}
 
-  // fallback: 배열 깊은 곳에서 가장 그럴듯한 한글 제목
-  var best = '';
-  queue = [data];
-  seen = 0;
-  while (queue.length && seen < 120) {
-    var node = queue.shift();
-    seen++;
-    if (typeof node === 'string') {
-      var cand = cleanFetchedFormTitle_(node);
-      if (
-        cand &&
-        cand.length >= 2 &&
-        /[가-힣]/.test(cand) &&
-        cand.length > best.length &&
-        cand.length <= 80
-      ) {
-        best = cand;
-      }
-      continue;
+  try {
+    if (typeof data[1][0] === 'string' && data[1][0].trim()) {
+      var t0 = cleanFetchedFormTitle_(data[1][0]);
+      // 설명은 제목 대용으로만 (짧을 때)
+      if (t0 && t0.length <= 60) return t0;
     }
-    if (Object.prototype.toString.call(node) === '[object Array]') {
-      for (var j = 0; j < node.length; j++) queue.push(node[j]);
-    }
-  }
-  return best;
+  } catch (e3) {}
+
+  return '';
 }
 
 /**
  * URL·단축링크·fileId → Drive fileId
- * forms.gle 은 FormApp으로 해석을 시도하고, 실패하면 linkOnly 등록용 힌트를 남깁니다.
+ * forms.gle / 응답 링크는 FormApp 없이 링크 등록(+HTML 제목)으로 처리합니다.
  * @returns {{ ok: boolean, id?: string, error?: string, linkOnly?: boolean, url?: string, name?: string }}
  */
 function resolveFileIdFromInput_(raw) {
@@ -942,37 +959,27 @@ function resolveFileIdFromInput_(raw) {
     /docs\.google\.com\/forms\//i.test(url) ||
     /forms\.google\.com\//i.test(url);
 
-  if (/forms\.gle\//i.test(url)) {
-    url = expandUrlRedirects_(url);
-    var formEdit2 = url.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+  if (isFormShare) {
+    // FormApp·hop-by-hop expand 는 느리고 실패함 → 한 번 fetch 로 제목만
+    var shareUrl = text.indexOf('http') === 0 ? String(text).trim() : url;
+    var meta = fetchFormPageMeta_(shareUrl);
+    var finalUrl = meta.finalUrl || shareUrl;
+
+    // 드물게 편집 URL 로 열리면 Drive fileId 등록
+    var formEdit2 = finalUrl.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+    if (!formEdit2) {
+      formEdit2 = shareUrl.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+    }
     if (formEdit2 && formEdit2[1]) {
       return { ok: true, id: formEdit2[1] };
     }
-  }
 
-  if (isFormShare) {
-    var tryUrls = [url];
-    if (String(raw).indexOf('http') === 0 && String(raw).trim() !== url) {
-      tryUrls.push(String(raw).trim());
-    }
-    for (var t = 0; t < tryUrls.length; t++) {
-      try {
-        var form = FormApp.openByUrl(tryUrls[t]);
-        return { ok: true, id: form.getId() };
-      } catch (formErr) {}
-    }
-    var shareUrl = text.indexOf('http') === 0 ? text : url;
-    var fetchedTitle = fetchFormTitleFromUrl_(shareUrl);
-    if (!fetchedTitle && url !== shareUrl) {
-      fetchedTitle = fetchFormTitleFromUrl_(url);
-    }
-    // 응답/단축 링크는 Drive fileId를 못 얻는 경우가 많음 → 링크만 등록
     return {
       ok: true,
       linkOnly: true,
       id: makeGleLinkId_(shareUrl),
       url: shareUrl,
-      name: fetchedTitle || '설문 링크',
+      name: meta.title || '설문 링크',
     };
   }
 
