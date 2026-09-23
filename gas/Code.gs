@@ -926,9 +926,12 @@ function guessFormTitleFromFbData_(data) {
 /**
  * URL·단축링크·fileId → Drive fileId
  * forms.gle / 응답 링크는 FormApp 없이 링크 등록(+HTML 제목)으로 처리합니다.
+ * @param {string} raw
+ * @param {{ skipTitleFetch?: boolean }=} opts
  * @returns {{ ok: boolean, id?: string, error?: string, linkOnly?: boolean, url?: string, name?: string }}
  */
-function resolveFileIdFromInput_(raw) {
+function resolveFileIdFromInput_(raw, opts) {
+  opts = opts || {};
   var text = String(raw || '').trim();
   if (!text) {
     return { ok: false, error: 'URL 또는 fileId 가 필요합니다.' };
@@ -962,6 +965,15 @@ function resolveFileIdFromInput_(raw) {
   if (isFormShare) {
     // FormApp·hop-by-hop expand 는 느리고 실패함 → 한 번 fetch 로 제목만
     var shareUrl = text.indexOf('http') === 0 ? String(text).trim() : url;
+    if (opts.skipTitleFetch) {
+      return {
+        ok: true,
+        linkOnly: true,
+        id: makeGleLinkId_(shareUrl),
+        url: shareUrl,
+        name: '',
+      };
+    }
     var meta = fetchFormPageMeta_(shareUrl);
     var finalUrl = meta.finalUrl || shareUrl;
 
@@ -999,8 +1011,12 @@ function resolveFileIdFromInput_(raw) {
  * - fileId 또는 시트/설문 URL(forms.gle 포함) 입력 가능
  * - forms.gle 해석 실패 시에도 링크만 허브에 등록 가능
  */
-function registerSheetById_(fileId) {
-  var resolved = resolveFileIdFromInput_(fileId);
+function registerSheetById_(fileId, optName) {
+  var preferredName = optName ? String(optName).trim() : '';
+  // Next.js 가 제목을 미리 보내면 GAS HTML fetch 를 건너뛰어 등록을 빠르게 함
+  var resolved = resolveFileIdFromInput_(fileId, {
+    skipTitleFetch: !!preferredName,
+  });
   if (!resolved.ok) {
     return { ok: false, error: resolved.error };
   }
@@ -1008,13 +1024,13 @@ function registerSheetById_(fileId) {
   // Drive fileId 없이 설문 단축 링크만 등록
   if (resolved.linkOnly) {
     var existingLink = findRegisteredLinkItem_(resolved.id);
-    var linkName = resolved.name || '설문 링크';
-    // 재등록 시 예전 placeholder 제목이면 새로 가져온 제목으로 갱신
+    var linkName = preferredName || resolved.name || '설문 링크';
+    // 재등록 시 새 제목을 못 가져왔고 기존에 실제 제목이 있으면 유지
     if (
       existingLink &&
       existingLink.name &&
       existingLink.name !== '설문 링크' &&
-      (!resolved.name || resolved.name === '설문 링크')
+      (!linkName || linkName === '설문 링크')
     ) {
       linkName = existingLink.name;
     }
@@ -1043,7 +1059,8 @@ function registerSheetById_(fileId) {
       alreadyRegistered: alreadyLink,
       linkOnly: true,
       message: alreadyLink
-        ? '이미 등록된 설문 링크입니다.' + (linkName !== '설문 링크' ? ' 제목을 갱신했습니다.' : '')
+        ? '이미 등록된 설문 링크입니다.' +
+          (linkName !== '설문 링크' ? ' 제목을 갱신했습니다.' : '')
         : '설문 단축 링크를 허브에 등록했습니다.',
     };
   }
@@ -1069,10 +1086,15 @@ function registerSheetById_(fileId) {
     }
     removeDismissedFileId_(id);
     removeRegisteredLinkItem_(id);
+    var driveItem = driveObjToItem_(file);
+    // Drive 등록이어도 클라이언트가 보낸 표시명이 있으면 우선(링크 폴백과 동일 UX)
+    if (preferredName && (!driveItem.name || driveItem.name === '설문 링크')) {
+      driveItem.name = preferredName;
+    }
     return {
       ok: true,
       id: id,
-      item: driveObjToItem_(file),
+      item: driveItem,
       alreadyRegistered: already,
     };
   } catch (e) {
@@ -1577,7 +1599,8 @@ function doPost(e) {
 
   if (action === 'register' || action === 'registerfile' || action === 'register_file') {
     var regId = body.fileId || '';
-    return jsonOutput_(registerSheetById_(regId));
+    var regName = body.name || body.title || '';
+    return jsonOutput_(registerSheetById_(regId, regName));
   }
 
   if (action === 'restore') {

@@ -35,6 +35,29 @@ const GROUP_COLLECT_FIRST_KEY = "wasok-group-collect-first";
 const ACTIVE_TAB_KEY = "wasok-active-tab";
 const COMPLETED_COLLAPSED_KEY = "wasok-completed-collapsed";
 
+/**
+ * GAS 구버전이 제목을 「설문 링크」로만 돌려줄 때,
+ * 화면에 이미 있는 실제 제목을 덮어쓰지 않습니다.
+ */
+function preserveBetterNames(
+  incoming: SheetItem[],
+  ...knownLists: SheetItem[][]
+): SheetItem[] {
+  const known = new Map<string, string>();
+  for (const list of knownLists) {
+    for (const item of list) {
+      if (item.id && item.name && item.name !== "설문 링크") {
+        known.set(item.id, item.name);
+      }
+    }
+  }
+  return incoming.map((item) => {
+    if (item.name && item.name !== "설문 링크") return item;
+    const better = known.get(item.id);
+    return better ? { ...item, name: better } : item;
+  });
+}
+
 const TAB_OPTIONS: { id: ActiveTabFilter; label: string }[] = [
   { id: "all", label: "전체" },
   { id: "info", label: "정보" },
@@ -270,9 +293,33 @@ export function WasokDashboard() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      const next = Array.isArray(data.items) ? data.items : [];
-      const nextCollect = Array.isArray(data.collectItems) ? data.collectItems : [];
-      const nextDone = Array.isArray(data.completedItems) ? data.completedItems : [];
+      const next = preserveBetterNames(
+        Array.isArray(data.items) ? data.items : [],
+        itemsRef.current,
+        collectRef.current,
+        completedRef.current,
+        peek.items,
+        peek.collectItems,
+        peek.completedItems
+      );
+      const nextCollect = preserveBetterNames(
+        Array.isArray(data.collectItems) ? data.collectItems : [],
+        itemsRef.current,
+        collectRef.current,
+        completedRef.current,
+        peek.items,
+        peek.collectItems,
+        peek.completedItems
+      );
+      const nextDone = preserveBetterNames(
+        Array.isArray(data.completedItems) ? data.completedItems : [],
+        itemsRef.current,
+        collectRef.current,
+        completedRef.current,
+        peek.items,
+        peek.collectItems,
+        peek.completedItems
+      );
       setItems(next);
       setCollectItems(nextCollect);
       setCompletedItems(nextDone);

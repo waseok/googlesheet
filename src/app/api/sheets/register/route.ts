@@ -2,11 +2,15 @@ import { NextResponse } from "next/server";
 import type { GasRegisterResponse } from "@/lib/types";
 import { requireGasMutationToken, requireGasWebAppUrl } from "@/lib/gas-config";
 import { normalizeGasSheetItem } from "@/lib/normalize-sheet-item";
+import {
+  fetchGoogleFormTitle,
+  looksLikeGoogleFormShareUrl,
+} from "@/lib/fetch-form-title";
 
 /**
  * fileId 수동 등록을 GAS에 위임합니다.
- * - 권한이 없는 fileId는 GAS에서 거부됩니다.
- * - 등록 후 목록 조회에 포함되도록 GAS ScriptProperties에 저장합니다.
+ * forms.gle 등 설문 단축 링크는 Next.js 에서 제목을 먼저 가져온 뒤 GAS에 name 으로 전달합니다.
+ * (GAS UrlFetchApp 제목 스크랩은 불안정·느림)
  */
 export async function POST(request: Request) {
   let baseUrl: string;
@@ -22,7 +26,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { fileId?: string };
+  let body: { fileId?: string; name?: string };
   try {
     body = await request.json();
   } catch {
@@ -40,6 +44,12 @@ export async function POST(request: Request) {
     );
   }
 
+  let resolvedName =
+    typeof body.name === "string" ? body.name.trim() : "";
+  if (!resolvedName && looksLikeGoogleFormShareUrl(fileId)) {
+    resolvedName = await fetchGoogleFormTitle(fileId);
+  }
+
   let gasRes: Response;
   try {
     gasRes = await fetch(baseUrl, {
@@ -50,6 +60,7 @@ export async function POST(request: Request) {
         action: "register",
         token,
         fileId,
+        ...(resolvedName ? { name: resolvedName } : {}),
       }),
     });
   } catch (e) {
@@ -70,8 +81,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const parsed = data as GasRegisterResponse;
-  const item = normalizeGasSheetItem(parsed.item);
+  const parsed = data as GasRegisterResponse & { linkOnly?: boolean; message?: string };
+  let item = normalizeGasSheetItem(parsed.item);
+
+  // GAS 가 name 을 무시하는 구버전이어도, 응답·낙관적 UI 에는 실제 제목을 심음
+  if (item && resolvedName && (item.name === "설문 링크" || !item.name)) {
+    item = { ...item, name: resolvedName };
+  }
+
   const normalized: GasRegisterResponse = {
     ok: parsed.ok === true,
     id: parsed.id,
