@@ -767,6 +767,146 @@ function makeGleLinkId_(url) {
 }
 
 /**
+ * 공개 설문 페이지 HTML에서 제목을 가져옵니다.
+ * @param {string} pageUrl
+ * @returns {string}
+ */
+function fetchFormTitleFromUrl_(pageUrl) {
+  try {
+    var resp = UrlFetchApp.fetch(pageUrl, {
+      followRedirects: true,
+      muteHttpExceptions: true,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    });
+    if (resp.getResponseCode() >= 400) return '';
+    var html = resp.getContentText() || '';
+
+    // Google Forms 공개 데이터 블록
+    var dataTitle = html.match(/FB_PUBLIC_LOAD_DATA_\s*=\s*(\[[\s\S]*?\]);/);
+    if (dataTitle && dataTitle[1]) {
+      try {
+        var data = JSON.parse(dataTitle[1]);
+        // 구조가 버전마다 달라서 문자열 후보를 넓게 탐색
+        var guessed = guessFormTitleFromFbData_(data);
+        if (guessed) return guessed;
+      } catch (ignoreJson) {}
+    }
+
+    var og = html.match(
+      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
+    );
+    if (!og) {
+      og = html.match(
+        /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i
+      );
+    }
+    if (og && og[1]) return cleanFetchedFormTitle_(og[1]);
+
+    var title = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    if (title && title[1]) return cleanFetchedFormTitle_(title[1]);
+  } catch (e) {}
+  return '';
+}
+
+function cleanFetchedFormTitle_(raw) {
+  var t = String(raw || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  t = t.replace(/\s*[-–|]\s*Google\s*Forms?\s*$/i, '').trim();
+  t = t.replace(/\s*[-–|]\s*Google\s*설문지?\s*$/i, '').trim();
+  if (!t || /^google\s*forms?$/i.test(t) || t === '설문지') return '';
+  if (t.length > 120) t = t.substring(0, 120);
+  return t;
+}
+
+/**
+ * FB_PUBLIC_LOAD_DATA_ 배열에서 폼 제목 후보를 찾습니다.
+ * @param {*} data
+ * @returns {string}
+ */
+function guessFormTitleFromFbData_(data) {
+  if (!data) return '';
+  // 흔한 위치: data[1][8] 또는 data[1][1] 등 — 안전하게 BFS
+  var queue = [data];
+  var seen = 0;
+  while (queue.length && seen < 80) {
+    var cur = queue.shift();
+    seen++;
+    if (typeof cur === 'string') {
+      var s = cur.trim();
+      if (
+        s.length >= 2 &&
+        s.length <= 120 &&
+        s.indexOf('http') !== 0 &&
+        s.indexOf('{') !== 0 &&
+        !/^[\d.]+$/.test(s) &&
+        s.indexOf('docs.google') === -1
+      ) {
+        // 너무 일반적인 메타 문자열 제외
+        if (
+          !/^(true|false|null|form|forms|google)$/i.test(s) &&
+          /[가-힣A-Za-z]/.test(s)
+        ) {
+          // 첫 의미 있는 한글/영문 문자열 중 길이가 적당한 것을 선호하기 위해
+          // 상위 레벨에서 찾은 긴 문자열을 반환하도록 아래에서 재탐색
+        }
+      }
+      continue;
+    }
+    if (Object.prototype.toString.call(cur) === '[object Array]') {
+      for (var i = 0; i < cur.length; i++) queue.push(cur[i]);
+    }
+  }
+
+  // 알려진 패턴 우선: [1][8], [1][0], [1][1]
+  try {
+    if (data[1] && typeof data[1][8] === 'string' && data[1][8].trim()) {
+      return cleanFetchedFormTitle_(data[1][8]);
+    }
+  } catch (e1) {}
+  try {
+    if (data[1] && typeof data[1][0] === 'string' && data[1][0].trim()) {
+      return cleanFetchedFormTitle_(data[1][0]);
+    }
+  } catch (e2) {}
+
+  // fallback: 배열 깊은 곳에서 가장 그럴듯한 한글 제목
+  var best = '';
+  queue = [data];
+  seen = 0;
+  while (queue.length && seen < 120) {
+    var node = queue.shift();
+    seen++;
+    if (typeof node === 'string') {
+      var cand = cleanFetchedFormTitle_(node);
+      if (
+        cand &&
+        cand.length >= 2 &&
+        /[가-힣]/.test(cand) &&
+        cand.length > best.length &&
+        cand.length <= 80
+      ) {
+        best = cand;
+      }
+      continue;
+    }
+    if (Object.prototype.toString.call(node) === '[object Array]') {
+      for (var j = 0; j < node.length; j++) queue.push(node[j]);
+    }
+  }
+  return best;
+}
+
+/**
  * URL·단축링크·fileId → Drive fileId
  * forms.gle 은 FormApp으로 해석을 시도하고, 실패하면 linkOnly 등록용 힌트를 남깁니다.
  * @returns {{ ok: boolean, id?: string, error?: string, linkOnly?: boolean, url?: string, name?: string }}
@@ -821,13 +961,18 @@ function resolveFileIdFromInput_(raw) {
         return { ok: true, id: form.getId() };
       } catch (formErr) {}
     }
+    var shareUrl = text.indexOf('http') === 0 ? text : url;
+    var fetchedTitle = fetchFormTitleFromUrl_(shareUrl);
+    if (!fetchedTitle && url !== shareUrl) {
+      fetchedTitle = fetchFormTitleFromUrl_(url);
+    }
     // 응답/단축 링크는 Drive fileId를 못 얻는 경우가 많음 → 링크만 등록
     return {
       ok: true,
       linkOnly: true,
-      id: makeGleLinkId_(text.indexOf('http') === 0 ? text : url),
-      url: text.indexOf('http') === 0 ? text : url,
-      name: '설문 링크',
+      id: makeGleLinkId_(shareUrl),
+      url: shareUrl,
+      name: fetchedTitle || '설문 링크',
     };
   }
 
@@ -855,14 +1000,28 @@ function registerSheetById_(fileId) {
 
   // Drive fileId 없이 설문 단축 링크만 등록
   if (resolved.linkOnly) {
+    var existingLink = findRegisteredLinkItem_(resolved.id);
+    var linkName = resolved.name || '설문 링크';
+    // 재등록 시 예전 placeholder 제목이면 새로 가져온 제목으로 갱신
+    if (
+      existingLink &&
+      existingLink.name &&
+      existingLink.name !== '설문 링크' &&
+      (!resolved.name || resolved.name === '설문 링크')
+    ) {
+      linkName = existingLink.name;
+    }
     var linkItem = {
       id: resolved.id,
-      name: resolved.name || '설문 링크',
+      name: linkName,
       url: resolved.url,
-      author: '',
-      description: '',
+      author: existingLink ? existingLink.author || '' : '',
+      description: existingLink ? existingLink.description || '' : '',
       lastUpdated: new Date().toISOString(),
-      createdTime: new Date().toISOString(),
+      createdTime:
+        existingLink && existingLink.createdTime
+          ? existingLink.createdTime
+          : new Date().toISOString(),
       kind: 'form',
       mimeType: FORM_MIME,
       linkOnly: true,
@@ -877,8 +1036,8 @@ function registerSheetById_(fileId) {
       alreadyRegistered: alreadyLink,
       linkOnly: true,
       message: alreadyLink
-        ? '이미 등록된 설문 링크입니다.'
-        : '설문 단축 링크를 허브에 등록했습니다. (Drive 파일이 아닌 링크 등록)',
+        ? '이미 등록된 설문 링크입니다.' + (linkName !== '설문 링크' ? ' 제목을 갱신했습니다.' : '')
+        : '설문 단축 링크를 허브에 등록했습니다.',
     };
   }
 
