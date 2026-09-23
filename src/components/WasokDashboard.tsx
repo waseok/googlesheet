@@ -554,6 +554,8 @@ export function WasokDashboard() {
         ok?: boolean;
         alreadyRegistered?: boolean;
         error?: string;
+        message?: string;
+        linkOnly?: boolean;
       };
 
       if (!res.ok || data.ok === false) {
@@ -561,9 +563,14 @@ export function WasokDashboard() {
       }
 
       if (data.alreadyRegistered) {
-        toast.success("이미 등록된 항목입니다.");
+        toast.success(data.message || "이미 등록된 항목입니다.");
       } else {
-        toast.success("등록했습니다. 목록을 새로 불러옵니다.");
+        toast.success(
+          data.message ||
+            (data.linkOnly
+              ? "설문 링크를 등록했습니다."
+              : "등록했습니다. 목록을 새로 불러옵니다.")
+        );
       }
 
       setRegisterInput("");

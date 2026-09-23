@@ -30,6 +30,8 @@ var INFO_MARK = '정보';
 var SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 var FORM_MIME = 'application/vnd.google-apps.form';
 var REGISTERED_FILE_IDS_PROP = 'REGISTERED_FILE_IDS';
+/** 수동 등록한 외부 링크(설문 단축 URL 등) — Drive fileId 없이 허브에만 표시 */
+var REGISTERED_LINK_ITEMS_PROP = 'REGISTERED_LINK_ITEMS';
 var VIRTUAL_COMPLETED_FILE_IDS_PROP = 'VIRTUAL_COMPLETED_FILE_IDS';
 /** 완료 폴더에 남아 있어도 허브에서는 진행 중으로 취급(되돌리기 이동 권한 없을 때) */
 var VIRTUAL_RESTORED_FILE_IDS_PROP = 'VIRTUAL_RESTORED_FILE_IDS';
@@ -165,7 +167,19 @@ function isRegisteredFileId_(fileId) {
   for (var i = 0; i < ids.length; i++) {
     if (ids[i] === fileId) return true;
   }
+  var links = getRegisteredLinkItems_();
+  for (var j = 0; j < links.length; j++) {
+    if (links[j].id === fileId) return true;
+  }
   return false;
+}
+
+function findRegisteredLinkItem_(fileId) {
+  var links = getRegisteredLinkItems_();
+  for (var i = 0; i < links.length; i++) {
+    if (links[i].id === fileId) return links[i];
+  }
+  return null;
 }
 
 /**
@@ -394,6 +408,100 @@ function setRegisteredFileIds_(ids) {
 }
 
 /**
+ * 링크만 등록된 항목(forms.gle 등 Drive fileId 없이 허브 표시)
+ * @returns {Array<Object>}
+ */
+function getRegisteredLinkItems_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(REGISTERED_LINK_ITEMS_PROP);
+  if (!raw) return [];
+  try {
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < parsed.length; i++) {
+      var row = parsed[i];
+      if (!row || typeof row !== 'object') continue;
+      var id = row.id ? String(row.id).trim() : '';
+      var url = row.url ? String(row.url).trim() : '';
+      var name = row.name ? String(row.name).trim() : '';
+      if (!id || !url || seen[id]) continue;
+      seen[id] = true;
+      out.push({
+        id: id,
+        name: name || '설문 링크',
+        url: url,
+        author: row.author ? String(row.author) : '',
+        authorEmail: '',
+        description: row.description ? String(row.description) : '',
+        lastUpdated: row.lastUpdated || new Date().toISOString(),
+        createdTime: row.createdTime || row.lastUpdated || new Date().toISOString(),
+        kind: row.kind === 'sheet' ? 'sheet' : 'form',
+        mimeType: row.kind === 'sheet' ? SPREADSHEET_MIME : FORM_MIME,
+        linkOnly: true,
+      });
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+function setRegisteredLinkItems_(items) {
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < items.length; i++) {
+    var row = items[i];
+    if (!row || !row.id || !row.url) continue;
+    var id = String(row.id).trim();
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    out.push({
+      id: id,
+      name: row.name || '설문 링크',
+      url: String(row.url).trim(),
+      author: row.author || '',
+      description: row.description || '',
+      lastUpdated: row.lastUpdated || new Date().toISOString(),
+      createdTime: row.createdTime || new Date().toISOString(),
+      kind: row.kind === 'sheet' ? 'sheet' : 'form',
+    });
+  }
+  PropertiesService.getScriptProperties().setProperty(
+    REGISTERED_LINK_ITEMS_PROP,
+    JSON.stringify(out)
+  );
+}
+
+function upsertRegisteredLinkItem_(item) {
+  var items = getRegisteredLinkItems_();
+  var found = false;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].id === item.id) {
+      items[i] = item;
+      found = true;
+      break;
+    }
+  }
+  if (!found) items.push(item);
+  setRegisteredLinkItems_(items);
+  return found;
+}
+
+function removeRegisteredLinkItem_(fileId) {
+  var items = getRegisteredLinkItems_();
+  var next = [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].id !== fileId) next.push(items[i]);
+  }
+  setRegisteredLinkItems_(next);
+}
+
+function isLinkOnlyId_(fileId) {
+  return String(fileId || '').indexOf('gle_') === 0 || String(fileId || '').indexOf('link_') === 0;
+}
+
+/**
  * ScriptProperties 에 저장된 "가상 완료" fileId 목록(JSON 배열)을 읽습니다.
  * 이동 권한이 없어 실제 폴더 이동이 실패한 파일을 완료 상태로 관리할 때 사용합니다.
  * @returns {Array<string>}
@@ -605,10 +713,63 @@ function buildIdMap_(ids) {
 }
 
 /**
+ * URL 리다이렉트를 따라가 최종 주소를 구합니다.
+ * @param {string} startUrl
+ * @returns {string}
+ */
+function expandUrlRedirects_(startUrl) {
+  var url = startUrl;
+  for (var hop = 0; hop < 6; hop++) {
+    if (!/forms\.gle\//i.test(url) && /docs\.google\.com\//i.test(url)) {
+      return url;
+    }
+    try {
+      var resp = UrlFetchApp.fetch(url, {
+        followRedirects: false,
+        muteHttpExceptions: true,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      var code = resp.getResponseCode();
+      var headers = resp.getHeaders();
+      var loc = headers.Location || headers.location || '';
+      if (!loc || (code < 300 || code >= 400)) {
+        return url;
+      }
+      if (loc.indexOf('http') !== 0) {
+        var baseMatch = url.match(/^(https?:\/\/[^/]+)/i);
+        var base = baseMatch ? baseMatch[1] : '';
+        loc = loc.charAt(0) === '/' ? base + loc : url.replace(/\/[^/]*$/, '/') + loc;
+      }
+      url = loc;
+    } catch (e) {
+      return url;
+    }
+  }
+  return url;
+}
+
+function makeGleLinkId_(url) {
+  var m = String(url).match(/forms\.gle\/([A-Za-z0-9_-]+)/i);
+  if (m && m[1]) return 'gle_' + m[1];
+  var digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(url),
+    Utilities.Charset.UTF_8
+  );
+  var hex = '';
+  for (var i = 0; i < digest.length && hex.length < 24; i++) {
+    var b = digest[i];
+    if (b < 0) b += 256;
+    var h = b.toString(16);
+    hex += h.length === 1 ? '0' + h : h;
+  }
+  return 'link_' + hex;
+}
+
+/**
  * URL·단축링크·fileId → Drive fileId
- * forms.gle /forms/d/e/ 는 FormApp.openByUrl 로 해석합니다.
- * @param {string} raw
- * @returns {{ ok: boolean, id?: string, error?: string }}
+ * forms.gle 은 FormApp으로 해석을 시도하고, 실패하면 linkOnly 등록용 힌트를 남깁니다.
+ * @returns {{ ok: boolean, id?: string, error?: string, linkOnly?: boolean, url?: string, name?: string }}
  */
 function resolveFileIdFromInput_(raw) {
   var text = String(raw || '').trim();
@@ -616,7 +777,6 @@ function resolveFileIdFromInput_(raw) {
     return { ok: false, error: 'URL 또는 fileId 가 필요합니다.' };
   }
 
-  // 순수 fileId
   if (/^[a-zA-Z0-9-_]{20,}$/.test(text) && text.indexOf('/') === -1) {
     return { ok: true, id: text };
   }
@@ -633,44 +793,42 @@ function resolveFileIdFromInput_(raw) {
 
   var url = text;
   if (url.indexOf('http') !== 0) {
-    if (/^forms\.gle\//i.test(url)) {
-      url = 'https://' + url;
-    } else if (/^docs\.google\.com\//i.test(url)) {
-      url = 'https://' + url;
-    }
+    if (/^forms\.gle\//i.test(url)) url = 'https://' + url;
+    else if (/^docs\.google\.com\//i.test(url)) url = 'https://' + url;
   }
 
-  // forms.gle 단축 링크 → Location 헤더로 실제 URL 확보
+  var isFormShare =
+    /forms\.gle\//i.test(url) ||
+    /docs\.google\.com\/forms\//i.test(url) ||
+    /forms\.google\.com\//i.test(url);
+
   if (/forms\.gle\//i.test(url)) {
-    try {
-      var resp = UrlFetchApp.fetch(url, {
-        followRedirects: false,
-        muteHttpExceptions: true,
-      });
-      var headers = resp.getHeaders();
-      var loc = headers.Location || headers.location || '';
-      if (loc) {
-        url = loc;
-        var formEdit2 = url.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
-        if (formEdit2 && formEdit2[1]) {
-          return { ok: true, id: formEdit2[1] };
-        }
-      }
-    } catch (ignoreRedirect) {}
+    url = expandUrlRedirects_(url);
+    var formEdit2 = url.match(/\/forms\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
+    if (formEdit2 && formEdit2[1]) {
+      return { ok: true, id: formEdit2[1] };
+    }
   }
 
-  // 설문 편집·응답 URL → FormApp (실행 계정에 접근 권한 필요)
-  if (/docs\.google\.com\/forms\//i.test(url) || /forms\.gle\//i.test(text)) {
-    try {
-      var form = FormApp.openByUrl(url);
-      return { ok: true, id: form.getId() };
-    } catch (formErr) {
-      return {
-        ok: false,
-        error:
-          '설문 단축/응답 URL을 해석하지 못했습니다. GAS 실행 계정에 해당 폼 접근 권한이 있는지 확인하거나, 폼 편집 URL(/forms/d/파일ID/edit)을 사용하세요.',
-      };
+  if (isFormShare) {
+    var tryUrls = [url];
+    if (String(raw).indexOf('http') === 0 && String(raw).trim() !== url) {
+      tryUrls.push(String(raw).trim());
     }
+    for (var t = 0; t < tryUrls.length; t++) {
+      try {
+        var form = FormApp.openByUrl(tryUrls[t]);
+        return { ok: true, id: form.getId() };
+      } catch (formErr) {}
+    }
+    // 응답/단축 링크는 Drive fileId를 못 얻는 경우가 많음 → 링크만 등록
+    return {
+      ok: true,
+      linkOnly: true,
+      id: makeGleLinkId_(text.indexOf('http') === 0 ? text : url),
+      url: text.indexOf('http') === 0 ? text : url,
+      name: '설문 링크',
+    };
   }
 
   try {
@@ -680,20 +838,50 @@ function resolveFileIdFromInput_(raw) {
 
   return {
     ok: false,
-    error: '올바른 시트·설문 URL 또는 fileId가 아닙니다. forms.gle 단축 링크도 등록할 수 있습니다.',
+    error: '올바른 시트·설문 URL 또는 fileId가 아닙니다.',
   };
 }
 
 /**
  * fileId를 등록 목록에 추가합니다(이미 있으면 유지).
  * - fileId 또는 시트/설문 URL(forms.gle 포함) 입력 가능
- * - 구글 시트 또는 설문(폼)이면 제목 무관 등록 가능
+ * - forms.gle 해석 실패 시에도 링크만 허브에 등록 가능
  */
 function registerSheetById_(fileId) {
   var resolved = resolveFileIdFromInput_(fileId);
   if (!resolved.ok) {
     return { ok: false, error: resolved.error };
   }
+
+  // Drive fileId 없이 설문 단축 링크만 등록
+  if (resolved.linkOnly) {
+    var linkItem = {
+      id: resolved.id,
+      name: resolved.name || '설문 링크',
+      url: resolved.url,
+      author: '',
+      description: '',
+      lastUpdated: new Date().toISOString(),
+      createdTime: new Date().toISOString(),
+      kind: 'form',
+      mimeType: FORM_MIME,
+      linkOnly: true,
+    };
+    var alreadyLink = upsertRegisteredLinkItem_(linkItem);
+    removeDismissedFileId_(resolved.id);
+    removeVirtualCompletedFileId_(resolved.id);
+    return {
+      ok: true,
+      id: resolved.id,
+      item: linkItem,
+      alreadyRegistered: alreadyLink,
+      linkOnly: true,
+      message: alreadyLink
+        ? '이미 등록된 설문 링크입니다.'
+        : '설문 단축 링크를 허브에 등록했습니다. (Drive 파일이 아닌 링크 등록)',
+    };
+  }
+
   var id = resolved.id;
   try {
     var file = getDriveFileById_(id);
@@ -714,6 +902,7 @@ function registerSheetById_(fileId) {
       setRegisteredFileIds_(ids);
     }
     removeDismissedFileId_(id);
+    removeRegisteredLinkItem_(id);
     return {
       ok: true,
       id: id,
@@ -724,7 +913,7 @@ function registerSheetById_(fileId) {
     return {
       ok: false,
       error:
-        '해당 파일에 접근할 수 없습니다. 공유 권한 또는 URL을 확인하세요. (설문 forms.gle 은 GAS 실행 계정이 폼을 열 수 있어야 합니다.)',
+        '해당 파일에 접근할 수 없습니다. 공유 권한 또는 URL을 확인하세요.',
     };
   }
 }
@@ -840,6 +1029,11 @@ function listVirtualCompletedSheets_() {
   var rows = [];
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
+    var linkItem = findRegisteredLinkItem_(id);
+    if (linkItem) {
+      rows.push(linkItem);
+      continue;
+    }
     try {
       var f = getDriveFileById_(id);
       if (driveObjPassesCompletedListRules_(f) || driveObjPassesRegisterRules_(f)) {
@@ -885,6 +1079,10 @@ function listWasokSheets() {
     var dismissedMap = buildIdMap_(getDismissedFileIds_());
     var registeredIds = getRegisteredFileIds_();
     var registeredMap = buildIdMap_(registeredIds);
+    var linkItems = getRegisteredLinkItems_();
+    for (var li = 0; li < linkItems.length; li++) {
+      registeredMap[linkItems[li].id] = true;
+    }
     // 자동 검색: [와석초] 시트만. 설문·제목 없는 항목은 수동 등록.
     var query = "name contains '와석초' and mimeType = '" + SPREADSHEET_MIME + "' and trashed = false";
     var allFiles = searchDomainFiles_(query);
@@ -907,11 +1105,23 @@ function listWasokSheets() {
         }
       } catch (ignore) {}
     }
+    // forms.gle 등 링크만 등록된 설문
+    for (var lj = 0; lj < linkItems.length; lj++) {
+      var link = linkItems[lj];
+      if (dismissedMap[link.id]) continue;
+      if (virtualDoneMap[link.id] && !virtualRestoredMap[link.id]) continue;
+      if (!byId[link.id]) byId[link.id] = link;
+    }
     // 가상 되돌림인데 검색/등록에 안 잡힌 경우 Drive에서 단건으로 보강
     var virtualRestoredIds = getVirtualRestoredFileIds_();
     for (var vr = 0; vr < virtualRestoredIds.length; vr++) {
       var vrid = virtualRestoredIds[vr];
       if (byId[vrid] || dismissedMap[vrid]) continue;
+      var restoredLink = findRegisteredLinkItem_(vrid);
+      if (restoredLink) {
+        byId[vrid] = restoredLink;
+        continue;
+      }
       try {
         var vrf = getDriveFileById_(vrid);
         if (driveObjPassesRegisterRules_(vrf) || driveObjPassesListRules_(vrf)) {
@@ -972,6 +1182,15 @@ function saveFileDescription_(fileId, description) {
   var maxLen = 300;
   var text = description != null ? String(description) : '';
   if (text.length > maxLen) text = text.substring(0, maxLen);
+
+  var linkItem = findRegisteredLinkItem_(fileId);
+  if (linkItem) {
+    linkItem.description = text;
+    linkItem.lastUpdated = new Date().toISOString();
+    upsertRegisteredLinkItem_(linkItem);
+    return { ok: true, id: fileId, description: text };
+  }
+
   try {
     var file = DriveApp.getFileById(fileId);
     var gate = assertFileAllowedForDescription_(file);
@@ -985,6 +1204,21 @@ function saveFileDescription_(fileId, description) {
 
 function moveFileToCompleted(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
+
+  // forms.gle 링크 등록분은 Drive 이동 없이 가상 완료
+  if (findRegisteredLinkItem_(fileId) || isLinkOnlyId_(fileId)) {
+    addVirtualCompletedFileId_(fileId);
+    removeVirtualRestoredFileId_(fileId);
+    removeDismissedFileId_(fileId);
+    return {
+      ok: true,
+      id: fileId,
+      message: '설문 링크를 완료 처리했습니다.',
+      moved: false,
+      virtualCompleted: true,
+    };
+  }
+
   var folderId = getCompletedFolderId_();
   if (!folderId) {
     return {
@@ -1024,6 +1258,24 @@ function moveFileToCompleted(fileId) {
  */
 function dismissFromHub_(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
+
+  if (findRegisteredLinkItem_(fileId) || isLinkOnlyId_(fileId)) {
+    var vIdsLink = getVirtualCompletedFileIds_();
+    var inVirtualLink = false;
+    for (var vi = 0; vi < vIdsLink.length; vi++) {
+      if (vIdsLink[vi] === fileId) {
+        inVirtualLink = true;
+        break;
+      }
+    }
+    if (!inVirtualLink) {
+      return { ok: false, error: '완료 처리된 항목만 목록에서 삭제할 수 있습니다.' };
+    }
+    removeVirtualCompletedFileId_(fileId);
+    addDismissedFileId_(fileId);
+    return { ok: true, message: '허브 목록에서 삭제했습니다.', id: fileId };
+  }
+
   try {
     var file = getDriveFileById_(fileId, 'id, name, mimeType, parents');
     if ((file.name || '').indexOf(REQUIRED_TITLE_MARK) === -1 && !isRegisteredFileId_(fileId)) {
@@ -1052,6 +1304,14 @@ function dismissFromHub_(fileId) {
 
 function restoreFileFromCompleted(fileId) {
   if (!fileId) return { ok: false, error: 'fileId 가 필요합니다.' };
+
+  if (findRegisteredLinkItem_(fileId) || isLinkOnlyId_(fileId)) {
+    removeVirtualCompletedFileId_(fileId);
+    removeVirtualRestoredFileId_(fileId);
+    removeDismissedFileId_(fileId);
+    return { ok: true, message: '설문 링크를 되돌렸습니다.', id: fileId, moved: false };
+  }
+
   try {
     var file = getDriveFileById_(fileId, 'id, name, mimeType, createdTime, parents');
     var inVirtual = false;
@@ -1081,7 +1341,6 @@ function restoreFileFromCompleted(fileId) {
       return { ok: true, message: '완료 폴더에서 되돌렸습니다.', id: fileId, moved: true };
     } catch (moveErr) {
       var moveMsg = String(moveErr && moveErr.message ? moveErr.message : moveErr);
-      // 완료 처리와 동일: 폴더 이동 권한이 없으면 허브 목록만 되돌림
       if (moveMsg.indexOf('sufficient permissions') !== -1) {
         removeVirtualCompletedFileId_(fileId);
         addVirtualRestoredFileId_(fileId);
