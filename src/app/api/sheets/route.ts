@@ -48,12 +48,21 @@ export async function GET() {
     });
   }
 
+  const rawText = await gasRes.text();
   let data: unknown;
   try {
-    data = await gasRes.json();
+    data = JSON.parse(rawText);
   } catch {
+    // GAS 가 권한 요청·오류·로그인 페이지 등 HTML 을 돌려준 경우, 원인 파악용으로 제목을 함께 노출
+    const titleMatch = rawText.match(/<title[^>]*>([^<]*)<\/title>/i);
+    const hint = (titleMatch?.[1] || rawText.replace(/<[^>]+>/g, " "))
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 150);
     return NextResponse.json(
-      emptyListError("GAS 응답이 JSON 이 아닙니다. 웹앱 URL 을 확인하세요."),
+      emptyListError(
+        `GAS 응답이 JSON 이 아닙니다. 웹앱 URL·배포·권한 승인을 확인하세요. (HTTP ${gasRes.status}${hint ? `: ${hint}` : ""})`
+      ),
       { status: 502 }
     );
   }
